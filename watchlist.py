@@ -1,0 +1,12 @@
+WATCHLIST = [
+    "NIFTY FUT",
+    "BANKNIFTY FUT",
+    "RELIANCE FUT",
+    "ICICIBANK FUT",
+    "SBIN FUT",
+    "TCS FUT",
+    "TVSMOTOR FUT",
+    "INFY FUT",
+    "LT FUT",
+    "HDFCBANK FUT",
+]
