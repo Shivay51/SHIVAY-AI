@@ -1,44 +1,74 @@
+# ==========================================
+# SHIVAY AI PRO v2.5
+# Trade History
+# ==========================================
+
 import csv
 import os
 from datetime import datetime
 
 FILE_NAME = "trade_history.csv"
 
+HEADER = [
+
+    "Date",
+
+    "Symbol",
+
+    "Entry",
+
+    "Exit",
+
+    "Result",
+
+    "PnL %",
+
+    "Reason",
+
+]
+
+
+# ==========================================
+# CREATE FILE
+# ==========================================
 
 def create_file():
 
     if os.path.exists(FILE_NAME):
         return
 
-    with open(FILE_NAME, "w", newline="") as f:
+    with open(FILE_NAME, "w", newline="", encoding="utf-8") as file:
 
-        writer = csv.writer(f)
+        writer = csv.writer(file)
 
-        writer.writerow([
-            "Date",
-            "Symbol",
-            "Entry",
-            "Exit",
-            "Result",
-            "PnL %",
-            "Reason"
-        ])
+        writer.writerow(HEADER)
 
+
+# ==========================================
+# SAVE TRADE
+# ==========================================
 
 def save_trade(
+
     symbol,
+
     entry,
+
     exit_price,
+
     result,
+
     pnl,
-    reason
+
+    reason,
+
 ):
 
     create_file()
 
-    with open(FILE_NAME, "a", newline="") as f:
+    with open(FILE_NAME, "a", newline="", encoding="utf-8") as file:
 
-        writer = csv.writer(f)
+        writer = csv.writer(file)
 
         writer.writerow([
 
@@ -46,14 +76,40 @@ def save_trade(
 
             symbol,
 
-            entry,
+            round(float(entry), 2),
 
-            exit_price,
+            round(float(exit_price), 2),
 
             result,
 
-            pnl,
+            round(float(pnl), 2),
 
-            reason
+            reason,
 
         ])
+
+
+# ==========================================
+# TOTAL TRADES
+# ==========================================
+
+def total_trades():
+
+    create_file()
+
+    with open(FILE_NAME, "r", encoding="utf-8") as file:
+
+        return max(sum(1 for _ in file) - 1, 0)
+
+
+# ==========================================
+# RESET HISTORY
+# ==========================================
+
+def clear_history():
+
+    if os.path.exists(FILE_NAME):
+
+        os.remove(FILE_NAME)
+
+    create_file()

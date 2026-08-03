@@ -1,4 +1,5 @@
 from config import MIN_SCORE
+
 from score import calculate_score
 from breakout import breakout_filter
 from pullback import pullback_filter
@@ -21,18 +22,20 @@ def run_engine(market):
         if not is_market_bullish():
             return None
 
-        market_strength = get_market_strength()
         market_direction = get_market_direction()
+        market_strength = get_market_strength()
 
         # ==========================================
         # BREAKOUT
         # ==========================================
 
         breakout_ok = breakout_filter(
+
             market["high"],
             market["low"],
             market["close"],
             market["volume"],
+
         )
 
         # ==========================================
@@ -40,16 +43,18 @@ def run_engine(market):
         # ==========================================
 
         pullback_ok = pullback_filter(
+
             market["high"],
             market["low"],
             market["close"],
+
         )
 
         if not breakout_ok and not pullback_ok:
             return None
 
         # ==========================================
-        # AI SCORE
+        # SCORE
         # ==========================================
 
         score_data = calculate_score(market)
@@ -57,18 +62,21 @@ def run_engine(market):
         if score_data is None:
             return None
 
-        score = score_data.get("score", 0)
+        score = score_data["score"]
 
         # ==========================================
-        # MARKET BASED FILTER
+        # DYNAMIC REQUIRED SCORE
         # ==========================================
 
         required_score = MIN_SCORE
 
-        if market_strength < 75:
+        if market_direction == "🟡 SIDEWAYS":
             required_score += 5
 
-        if market_direction == "🟡 SIDEWAYS":
+        elif market_direction == "🔴 BEARISH":
+            required_score += 10
+
+        if market_strength < 75:
             required_score += 5
 
         if score < required_score:
@@ -82,30 +90,44 @@ def run_engine(market):
 
             setup = "🚀 Breakout + Pullback"
 
+            confidence = "★★★★★"
+
         elif breakout_ok:
 
             setup = "🔥 Breakout"
+
+            confidence = "★★★★☆"
 
         else:
 
             setup = "🔄 Pullback"
 
+            confidence = "★★★★☆"
+
         # ==========================================
-        # EXTRA DATA
+        # ENGINE INFO
         # ==========================================
 
         score_data["setup"] = setup
+
         score_data["market"] = market_direction
+
         score_data["market_strength"] = market_strength
+
         score_data["required_score"] = required_score
-        score_data["engine"] = "SHIVAY AI PRO v2.3"
+
+        score_data["engine_confidence"] = confidence
+
+        score_data["engine"] = "SHIVAY AI PRO v2.5"
 
         return score_data
 
     except Exception as e:
 
-        symbol = market.get("symbol", "UNKNOWN")
+        print(
 
-        print(f"❌ Engine Error [{symbol}] : {e}")
+            f"❌ Engine Error [{market.get('symbol','UNKNOWN')}] : {e}"
+
+        )
 
         return None
