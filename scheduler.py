@@ -5,6 +5,11 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from autoscan import auto_scan
+from trade_monitor import (
+    add_trade,
+    check_trades,
+)
+
 from config import (
     SCAN_INTERVAL,
     MARKET_START_HOUR,
@@ -38,18 +43,16 @@ async def scheduler(app):
 
         try:
 
-            now = datetime.now()
+            now = datetime.now().time()
 
-            current = now.time()
-
-            market_start = current.replace(
+            market_start = now.replace(
                 hour=MARKET_START_HOUR,
                 minute=MARKET_START_MINUTE,
                 second=0,
                 microsecond=0,
             )
 
-            market_end = current.replace(
+            market_end = now.replace(
                 hour=MARKET_END_HOUR,
                 minute=MARKET_END_MINUTE,
                 second=0,
@@ -60,31 +63,27 @@ async def scheduler(app):
             # MARKET CLOSED
             # ==========================================
 
-            if current < market_start or current > market_end:
+            if now < market_start or now > market_end:
 
                 print("⏸ Market Closed")
-
                 await asyncio.sleep(60)
-
                 continue
 
             # ==========================================
-            # SCAN MARKET
+            # SCAN NEW SIGNALS
             # ==========================================
 
             print("🔍 Scanning Market...")
 
             signals = auto_scan()
 
-            if not signals:
-
-                print("❌ No New Signal")
-
-            else:
+            if signals:
 
                 print(f"✅ {len(signals)} Signal(s) Found")
 
                 for trade in signals:
+
+                    add_trade(trade)
 
                     message = f"""
 🔱 SHIVAY AI PRO
@@ -94,9 +93,7 @@ async def scheduler(app):
 🔥 Setup : {trade.get('setup', 'N/A')}
 📊 Market : {trade.get('market', 'UNKNOWN')}
 
-💰 Price : ₹{trade['price']}
-🎯 Entry : ₹{trade['entry']}
-
+💰 Entry : ₹{trade['entry']}
 🛑 Stop Loss : ₹{trade['sl']}
 
 🥇 Target 1 : ₹{trade['target1']}
@@ -109,10 +106,9 @@ async def scheduler(app):
 📈 Signal : {trade['decision']}
 📉 RSI : {trade['rsi']}
 📏 ATR : {trade['atr']}
-⚠️ Risk : {trade['risk']}
 🎯 Confidence : {trade['confidence']}
 
-🤖 SHIVAY AI
+🤖 SHIVAY AI PRO
 """
 
                     await app.bot.send_message(
@@ -120,7 +116,78 @@ async def scheduler(app):
                         text=message,
                     )
 
-                    print(f"📨 Alert Sent : {trade['symbol']}")
+                    print(f"📨 Signal Sent : {trade['symbol']}")
+
+            else:
+
+                print("❌ No New Signal")
+
+            # ==========================================
+            # TRADE MONITOR
+            # ==========================================
+
+            alerts = check_trades()
+
+            for alert in alerts:
+
+                if alert["type"] == "TARGET1":
+
+                    text = f"""
+🎯 TARGET 1 HIT
+
+📈 {alert['symbol']}
+
+💰 Current Price : ₹{alert['price']}
+
+🛡 Stop Loss moved to Break-even
+
+🛑 New SL : ₹{alert['new_sl']}
+"""
+
+                elif alert["type"] == "TARGET2":
+
+                    text = f"""
+🥈 TARGET 2 HIT
+
+📈 {alert['symbol']}
+
+💰 Current Price : ₹{alert['price']}
+
+📈 Trailing Stop Activated
+
+🛑 New SL : ₹{alert['new_sl']}
+"""
+
+                elif alert["type"] == "TARGET3":
+
+                    text = f"""
+🏆 TARGET 3 HIT
+
+📈 {alert['symbol']}
+
+💰 Exit Price : ₹{alert['price']}
+
+🎉 Trade Closed Successfully
+"""
+
+                else:
+
+                    text = f"""
+🛑 STOP LOSS HIT
+
+📉 {alert['symbol']}
+
+💰 Exit Price : ₹{alert['price']}
+
+❌ Trade Closed
+"""
+
+                await app.bot.send_message(
+                    chat_id=int(CHAT_ID),
+                    text=text,
+                )
+
+                print(f"📢 {alert['type']} : {alert['symbol']}")
 
         except Exception as e:
 

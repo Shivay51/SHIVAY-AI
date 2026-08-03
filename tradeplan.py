@@ -1,11 +1,16 @@
+# ==========================================
+# SHIVAY AI PRO v2.1
+# Trade Plan Generator
+# ==========================================
+
 def create_trade_plan(price, atr_value, decision):
 
     price = float(price)
     atr_value = max(float(atr_value), 0.01)
 
-    # ==========================
+    # ==========================================
     # STRONG BUY
-    # ==========================
+    # ==========================================
 
     if decision == "🔥 STRONG BUY":
 
@@ -19,9 +24,9 @@ def create_trade_plan(price, atr_value, decision):
 
         target3 = round(price + (atr_value * 5.00), 2)
 
-    # ==========================
+    # ==========================================
     # BUY
-    # ==========================
+    # ==========================================
 
     elif decision == "✅ BUY":
 
@@ -35,9 +40,9 @@ def create_trade_plan(price, atr_value, decision):
 
         target3 = round(price + (atr_value * 4.00), 2)
 
-    # ==========================
+    # ==========================================
     # SELL
-    # ==========================
+    # ==========================================
 
     elif "SELL" in decision:
 
@@ -51,9 +56,9 @@ def create_trade_plan(price, atr_value, decision):
 
         target3 = round(price - (atr_value * 5.00), 2)
 
-    # ==========================
-    # WATCH / AVOID
-    # ==========================
+    # ==========================================
+    # WATCH
+    # ==========================================
 
     else:
 
@@ -67,6 +72,20 @@ def create_trade_plan(price, atr_value, decision):
 
         target3 = 0.0
 
+    # ==========================================
+    # RISK / REWARD
+    # ==========================================
+
+    risk = abs(entry - stop_loss)
+
+    reward = abs(target1 - entry)
+
+    rr_ratio = round(reward / risk, 2) if risk else 0
+
+    risk_percent = round((risk / entry) * 100, 2) if entry else 0
+
+    reward_percent = round((reward / entry) * 100, 2) if entry else 0
+
     return {
 
         "entry": entry,
@@ -78,5 +97,26 @@ def create_trade_plan(price, atr_value, decision):
         "target2": target2,
 
         "target3": target3,
+
+        "risk": round(risk, 2),
+
+        "reward": round(reward, 2),
+
+        "rr_ratio": rr_ratio,
+
+        "risk_percent": risk_percent,
+
+        "reward_percent": reward_percent,
+
+        # Future Use
+        "trail_sl": stop_loss,
+
+        "status": "OPEN",
+
+        "t1_hit": False,
+
+        "t2_hit": False,
+
+        "t3_hit": False,
 
     }
