@@ -1,28 +1,63 @@
 import pandas as pd
 
 
+# ==========================================
+# RELATIVE STRENGTH
+# SHIVAY AI PRO v2.4
+# ==========================================
+
 def relative_strength(stock_close, market_close):
 
-    stock = pd.Series(stock_close)
-    market = pd.Series(market_close)
+    stock = pd.Series(stock_close).dropna()
+    market = pd.Series(market_close).dropna()
 
-    # ઓછામાં ઓછા 20 Candles જોઈએ
-    if len(stock) < 20 or len(market) < 20:
+    if len(stock) < 50 or len(market) < 50:
         return False
 
-    # છેલ્લા 20 Candles નું Return
-    stock_return = (
+    # -------------------------
+    # 20 Candle Return
+    # -------------------------
+
+    stock20 = (
         (stock.iloc[-1] - stock.iloc[-20])
         / stock.iloc[-20]
     ) * 100
 
-    market_return = (
+    market20 = (
         (market.iloc[-1] - market.iloc[-20])
         / market.iloc[-20]
     ) * 100
 
-    # Market કરતાં ઓછામાં ઓછું 0.50% Strong હોવું જોઈએ
-    if stock_return > (market_return + 0.50):
-        return True
+    # -------------------------
+    # 50 Candle Return
+    # -------------------------
 
-    return False
+    stock50 = (
+        (stock.iloc[-1] - stock.iloc[-50])
+        / stock.iloc[-50]
+    ) * 100
+
+    market50 = (
+        (market.iloc[-1] - market.iloc[-50])
+        / market.iloc[-50]
+    ) * 100
+
+    score = 0
+
+    # Strong in Short Term
+
+    if stock20 > market20:
+        score += 40
+
+    if stock20 > (market20 + 1):
+        score += 20
+
+    # Strong in Medium Term
+
+    if stock50 > market50:
+        score += 20
+
+    if stock50 > (market50 + 2):
+        score += 20
+
+    return score >= 60

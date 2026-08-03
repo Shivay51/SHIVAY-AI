@@ -1,58 +1,64 @@
-from watchlist import WATCHLIST
+# ==========================================
+# SHIVAY AI PRO v2.3
+# Professional Scanner
+# ==========================================
+
+from ai_watchlist import get_ai_watchlist
+
+from data import get_market_data
 from engine import run_engine
 from strategy import analyze_trade
 from tradeplan import create_trade_plan
-from data import get_market_data
-from config import MAX_TRADES, MIN_SCORE
+
+from config import MAX_TRADES
 
 
 def scan_market():
 
     results = []
+
     scanned = set()
 
-    for stock in WATCHLIST:
+    watchlist = get_ai_watchlist()
+
+    print(f"📊 Scanning {len(watchlist)} Stocks")
+
+    for symbol in watchlist:
 
         try:
 
-            # ==========================
-            # Duplicate Skip
-            # ==========================
+            # ==========================================
+            # Duplicate Check
+            # ==========================================
 
-            if stock in scanned:
+            if symbol in scanned:
                 continue
 
-            # ==========================
+            # ==========================================
             # Market Data
-            # ==========================
+            # ==========================================
 
-            market = get_market_data(stock)
+            market = get_market_data(symbol)
 
             if market is None:
                 continue
 
-            # Symbol Engine ને મોકલો
-            market["symbol"] = stock
-
-            # ==========================
+            # ==========================================
             # AI Engine
-            # ==========================
+            # ==========================================
 
             score_data = run_engine(market)
 
             if score_data is None:
                 continue
 
-            score = score_data.get("score", 0)
+            score = score_data["score"]
 
-            if score < MIN_SCORE:
-                continue
-
-            # ==========================
+            # ==========================================
             # Trade Decision
-            # ==========================
+            # ==========================================
 
-            trade = analyze_trade(stock, score)
+            trade = analyze_trade(symbol, score)
 
             if trade["decision"] not in (
                 "🔥 STRONG BUY",
@@ -60,19 +66,27 @@ def scan_market():
             ):
                 continue
 
-            # ==========================
+            # ==========================================
             # Trade Plan
-            # ==========================
+            # ==========================================
 
             plan = create_trade_plan(
+
                 market["price"],
+
                 score_data["atr"],
-                trade["decision"],
+
+                trade["decision"]
+
             )
+
+            # ==========================================
+            # Final Result
+            # ==========================================
 
             results.append({
 
-                "symbol": stock,
+                "symbol": symbol,
 
                 "price": round(market["price"], 2),
 
@@ -87,6 +101,12 @@ def scan_market():
                 "target3": plan["target3"],
 
                 "score": score,
+
+                "setup": score_data.get("setup"),
+
+                "market": score_data.get("market"),
+
+                "market_strength": score_data.get("market_strength"),
 
                 "ema20": score_data["ema20"],
 
@@ -112,36 +132,46 @@ def scan_market():
 
                 "resistance": score_data["resistance"],
 
-                "setup": score_data.get("setup", "N/A"),
-
-                "market": score_data.get("market", "UNKNOWN"),
-
                 "decision": trade["decision"],
 
                 "risk": trade["risk"],
 
                 "confidence": trade["confidence"],
 
+                "rr_ratio": plan["rr_ratio"],
+
+                "risk_percent": plan["risk_percent"],
+
+                "reward_percent": plan["reward_percent"],
+
             })
 
-            scanned.add(stock)
+            scanned.add(symbol)
 
         except Exception as e:
 
-            print(f"❌ Scanner Error [{stock}] : {e}")
+            print(f"❌ Scanner Error [{symbol}] : {e}")
 
-    # ==========================
-    # Best Trades
-    # ==========================
+    # ==========================================
+    # Best Trades First
+    # ==========================================
 
     results.sort(
+
         key=lambda x: (
+
             x["score"],
-            float(str(x["confidence"]).replace("%", "")),
-            x["adx"],
-            x["rsi"],
+
+            x["market_strength"],
+
+            x["confidence"]
+
         ),
-        reverse=True,
+
+        reverse=True
+
     )
+
+    print(f"✅ High Probability Trades : {len(results)}")
 
     return results[:MAX_TRADES]

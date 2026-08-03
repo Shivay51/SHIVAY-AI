@@ -10,7 +10,7 @@ import pandas_ta as ta
 _market_cache = None
 _last_update = 0
 
-CACHE_TIME = 300   # 5 Minutes
+CACHE_TIME = 300  # 5 Minutes
 
 
 # ==========================================
@@ -24,11 +24,7 @@ def load_market_cache():
 
     now = time.time()
 
-    # Cache Valid
-    if (
-        _market_cache is not None
-        and (now - _last_update) < CACHE_TIME
-    ):
+    if _market_cache is not None and (now - _last_update) < CACHE_TIME:
         return _market_cache
 
     try:
@@ -66,48 +62,57 @@ def load_market_cache():
         nifty_price = float(nifty_close.iloc[-1])
         bank_price = float(bank_close.iloc[-1])
 
-        nifty_ema20 = float(
-            ta.ema(nifty_close, length=20).iloc[-1]
-        )
+        nifty_ema20 = float(ta.ema(nifty_close, length=20).iloc[-1])
+        nifty_ema50 = float(ta.ema(nifty_close, length=50).iloc[-1])
 
-        nifty_ema50 = float(
-            ta.ema(nifty_close, length=50).iloc[-1]
-        )
-
-        bank_ema20 = float(
-            ta.ema(bank_close, length=20).iloc[-1]
-        )
-
-        bank_ema50 = float(
-            ta.ema(bank_close, length=50).iloc[-1]
-        )
+        bank_ema20 = float(ta.ema(bank_close, length=20).iloc[-1])
+        bank_ema50 = float(ta.ema(bank_close, length=50).iloc[-1])
 
         nifty_bullish = nifty_price > nifty_ema20
         bank_bullish = bank_price > bank_ema20
 
+        # ==========================================
+        # MARKET DIRECTION
+        # ==========================================
+
         if nifty_bullish and bank_bullish:
-
             direction = "🟢 BULLISH"
-
         elif (not nifty_bullish) and (not bank_bullish):
-
             direction = "🔴 BEARISH"
-
         else:
-
             direction = "🟡 SIDEWAYS"
+
+        # ==========================================
+        # MARKET STRENGTH (0–100)
+        # ==========================================
+
+        strength = 0
+
+        if nifty_price > nifty_ema20:
+            strength += 25
+
+        if nifty_price > nifty_ema50:
+            strength += 25
+
+        if bank_price > bank_ema20:
+            strength += 25
+
+        if bank_price > bank_ema50:
+            strength += 25
 
         _market_cache = {
 
             "market_direction": direction,
 
+            "market_strength": strength,
+
             "nifty_price": nifty_price,
             "bank_price": bank_price,
 
             "nifty_ema20": nifty_ema20,
-            "bank_ema20": bank_ema20,
-
             "nifty_ema50": nifty_ema50,
+
+            "bank_ema20": bank_ema20,
             "bank_ema50": bank_ema50,
 
             "nifty_bullish": nifty_bullish,
@@ -122,7 +127,6 @@ def load_market_cache():
     except Exception as e:
 
         print(f"❌ Market Cache Error : {e}")
-
         return None
 
 
@@ -137,8 +141,7 @@ def is_market_bullish():
     if data is None:
         return True
 
-    # Nifty Bullish હોય તો Trading Allow
-    return data["nifty_bullish"]
+    return data["market_strength"] >= 50
 
 
 # ==========================================
@@ -153,3 +156,17 @@ def get_market_direction():
         return "UNKNOWN"
 
     return data["market_direction"]
+
+
+# ==========================================
+# MARKET STRENGTH
+# ==========================================
+
+def get_market_strength():
+
+    data = load_market_cache()
+
+    if data is None:
+        return 0
+
+    return data["market_strength"]
