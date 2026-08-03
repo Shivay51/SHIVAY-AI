@@ -1,4 +1,8 @@
+import logging
 import yfinance as yf
+
+# Yahoo Finance Log Hide
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 SYMBOLS = {
 
@@ -6,7 +10,7 @@ SYMBOLS = {
     "NIFTY FUT": "^NSEI",
     "BANKNIFTY FUT": "^NSEBANK",
 
-    # BANKING
+    # BANKS
     "HDFCBANK FUT": "HDFCBANK.NS",
     "ICICIBANK FUT": "ICICIBANK.NS",
     "SBIN FUT": "SBIN.NS",
@@ -21,23 +25,10 @@ SYMBOLS = {
     "HCLTECH FUT": "HCLTECH.NS",
     "TECHM FUT": "TECHM.NS",
     "WIPRO FUT": "WIPRO.NS",
-    "LTIM FUT": "LTIM.NS",
     "PERSISTENT FUT": "PERSISTENT.NS",
 
-    # PHARMA
-    "SUNPHARMA FUT": "SUNPHARMA.NS",
-    "CIPLA FUT": "CIPLA.NS",
-    "DRREDDY FUT": "DRREDDY.NS",
-    "DIVISLAB FUT": "DIVISLAB.NS",
-    "LUPIN FUT": "LUPIN.NS",
-    "TORNTPHARM FUT": "TORNTPHARM.NS",
-    "ZYDUSLIFE FUT": "ZYDUSLIFE.NS",
-
     # AUTO
-    "TATAMOTORS FUT": "TATAMOTORS.NS",
-    "M&M FUT": "M&M.NS",
     "MARUTI FUT": "MARUTI.NS",
-    "BAJAJ-AUTO FUT": "BAJAJ-AUTO.NS",
     "TVSMOTOR FUT": "TVSMOTOR.NS",
     "EICHERMOT FUT": "EICHERMOT.NS",
 
@@ -75,7 +66,6 @@ SYMBOLS = {
 
     # RETAIL
     "TRENT FUT": "TRENT.NS",
-    "DMART FUT": "DMART.NS",
 
     # TELECOM
     "BHARTIARTL FUT": "BHARTIARTL.NS",
@@ -86,16 +76,17 @@ def get_market_data(symbol):
 
     ticker = SYMBOLS.get(symbol)
 
-    if not ticker:
+    if ticker is None:
         return None
 
     try:
+
         df = yf.download(
             ticker,
             period="1mo",
             interval="15m",
-            progress=False,
             auto_adjust=True,
+            progress=False,
             threads=False,
         )
 
@@ -106,14 +97,27 @@ def get_market_data(symbol):
             df.columns = df.columns.get_level_values(0)
 
         return {
+
             "symbol": symbol,
+
             "price": float(df["Close"].iloc[-1]),
-            "close": df["Close"],
+
             "open": df["Open"],
+
             "high": df["High"],
+
             "low": df["Low"],
+
+            "close": df["Close"],
+
             "volume": df["Volume"],
+
+            "day_high": float(df["High"].tail(26).max()),
+
+            "day_low": float(df["Low"].tail(26).min()),
+
         }
 
     except Exception:
+
         return None

@@ -1,72 +1,147 @@
 from watchlist import WATCHLIST
-from score import calculate_score
+from engine import run_engine
 from strategy import analyze_trade
 from tradeplan import create_trade_plan
 from data import get_market_data
+from config import MAX_TRADES, MIN_SCORE
 
 
 def scan_market():
 
     results = []
+    scanned = set()
 
     for stock in WATCHLIST:
 
-        market = get_market_data(stock)
+        try:
 
-        if market is None:
-            continue
+            # ==========================
+            # Duplicate Skip
+            # ==========================
 
-        score_data = calculate_score(market)
+            if stock in scanned:
+                continue
 
-        score = score_data["score"]
+            # ==========================
+            # Market Data
+            # ==========================
 
-        trade = analyze_trade(stock, score)
+            market = get_market_data(stock)
 
-        plan = create_trade_plan(
-            market["price"],
-            score_data["atr"],
-            trade["decision"]
-        )
+            if market is None:
+                continue
 
-        if score < 60:
-            continue
+            # Symbol Engine ને મોકલો
+            market["symbol"] = stock
 
-        results.append({
+            # ==========================
+            # AI Engine
+            # ==========================
 
-            "symbol": stock,
+            score_data = run_engine(market)
 
-            "price": round(market["price"], 2),
+            if score_data is None:
+                continue
 
-            "entry": plan["entry"],
+            score = score_data.get("score", 0)
 
-            "sl": plan["sl"],
+            if score < MIN_SCORE:
+                continue
 
-            "target1": plan["target1"],
+            # ==========================
+            # Trade Decision
+            # ==========================
 
-            "target2": plan["target2"],
+            trade = analyze_trade(stock, score)
 
-            "target3": plan["target3"],
+            if trade["decision"] not in (
+                "🔥 STRONG BUY",
+                "✅ BUY",
+            ):
+                continue
 
-            "score": score,
+            # ==========================
+            # Trade Plan
+            # ==========================
 
-            "ema20": score_data["ema20"],
+            plan = create_trade_plan(
+                market["price"],
+                score_data["atr"],
+                trade["decision"],
+            )
 
-            "ema50": score_data["ema50"],
+            results.append({
 
-            "ema200": score_data["ema200"],
+                "symbol": stock,
 
-            "rsi": score_data["rsi"],
+                "price": round(market["price"], 2),
 
-            "atr": score_data["atr"],
+                "entry": plan["entry"],
 
-            "decision": trade["decision"],
+                "sl": plan["sl"],
 
-            "risk": trade["risk"],
+                "target1": plan["target1"],
 
-            "confidence": trade["confidence"]
+                "target2": plan["target2"],
 
-        })
+                "target3": plan["target3"],
 
-    results = sorted(results, key=lambda x: x["score"], reverse=True)
+                "score": score,
 
-    return results[:10]
+                "ema20": score_data["ema20"],
+
+                "ema50": score_data["ema50"],
+
+                "ema200": score_data["ema200"],
+
+                "rsi": score_data["rsi"],
+
+                "atr": score_data["atr"],
+
+                "adx": score_data["adx"],
+
+                "supertrend": score_data["supertrend"],
+
+                "macd": score_data["macd"],
+
+                "vwap": score_data["vwap"],
+
+                "volume_spike": score_data["volume_spike"],
+
+                "support": score_data["support"],
+
+                "resistance": score_data["resistance"],
+
+                "setup": score_data.get("setup", "N/A"),
+
+                "market": score_data.get("market", "UNKNOWN"),
+
+                "decision": trade["decision"],
+
+                "risk": trade["risk"],
+
+                "confidence": trade["confidence"],
+
+            })
+
+            scanned.add(stock)
+
+        except Exception as e:
+
+            print(f"❌ Scanner Error [{stock}] : {e}")
+
+    # ==========================
+    # Best Trades
+    # ==========================
+
+    results.sort(
+        key=lambda x: (
+            x["score"],
+            float(str(x["confidence"]).replace("%", "")),
+            x["adx"],
+            x["rsi"],
+        ),
+        reverse=True,
+    )
+
+    return results[:MAX_TRADES]
