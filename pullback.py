@@ -19,8 +19,8 @@ def pullback_filter(high, low, close):
     # Strong Trend
     trend = ema20 > ema50
 
-    # Price EMA20 નજીક (0.75%)
-    near_ema20 = abs(price - ema20) <= (price * 0.0075)
+    # Price EMA20 નજીક (1.5%)
+    near_ema20 = abs(price - ema20) <= (price * 0.015)
 
     # Bullish Momentum
     bullish = price > previous

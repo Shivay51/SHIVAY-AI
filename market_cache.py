@@ -10,7 +10,7 @@ import pandas_ta as ta
 _market_cache = None
 _last_update = 0
 
-CACHE_TIME = 300  # 5 Minutes
+CACHE_TIME = 300
 
 
 # ==========================================
@@ -83,7 +83,7 @@ def load_market_cache():
             direction = "🟡 SIDEWAYS"
 
         # ==========================================
-        # MARKET STRENGTH (0–100)
+        # MARKET STRENGTH
         # ==========================================
 
         strength = 0
@@ -103,7 +103,6 @@ def load_market_cache():
         _market_cache = {
 
             "market_direction": direction,
-
             "market_strength": strength,
 
             "nifty_price": nifty_price,
@@ -120,6 +119,17 @@ def load_market_cache():
 
         }
 
+        print("\n========== MARKET STATUS ==========")
+        print(f"Direction       : {direction}")
+        print(f"Market Strength : {strength}/100")
+        print(f"Nifty Price     : {nifty_price:.2f}")
+        print(f"Nifty EMA20     : {nifty_ema20:.2f}")
+        print(f"Nifty EMA50     : {nifty_ema50:.2f}")
+        print(f"Bank Price      : {bank_price:.2f}")
+        print(f"Bank EMA20      : {bank_ema20:.2f}")
+        print(f"Bank EMA50      : {bank_ema50:.2f}")
+        print("===================================\n")
+
         _last_update = now
 
         return _market_cache
@@ -127,6 +137,7 @@ def load_market_cache():
     except Exception as e:
 
         print(f"❌ Market Cache Error : {e}")
+
         return None
 
 
@@ -141,6 +152,15 @@ def is_market_bullish():
     if data is None:
         return True
 
+    # Bullish Market
+    if data["market_direction"] == "🟢 BULLISH":
+        return True
+
+    # Sideways Market પણ Allow
+    if data["market_direction"] == "🟡 SIDEWAYS":
+        return True
+
+    # Bearish Market
     return data["market_strength"] >= 50
 
 

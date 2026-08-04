@@ -15,11 +15,16 @@ def run_engine(market):
 
     try:
 
+        symbol = market.get("symbol", "UNKNOWN")
+
         # ==========================================
         # MARKET FILTER
         # ==========================================
 
         if not is_market_bullish():
+
+            print(f"🚫 {symbol} -> Market Filter")
+
             return None
 
         market_direction = get_market_direction()
@@ -51,6 +56,11 @@ def run_engine(market):
         )
 
         if not breakout_ok and not pullback_ok:
+
+            print(
+                f"🚫 {symbol} -> Breakout={breakout_ok} Pullback={pullback_ok}"
+            )
+
             return None
 
         # ==========================================
@@ -60,6 +70,9 @@ def run_engine(market):
         score_data = calculate_score(market)
 
         if score_data is None:
+
+            print(f"🚫 {symbol} -> Score Data Failed")
+
             return None
 
         score = score_data["score"]
@@ -80,6 +93,11 @@ def run_engine(market):
             required_score += 5
 
         if score < required_score:
+
+            print(
+                f"🚫 {symbol} -> Score={score} Need={required_score}"
+            )
+
             return None
 
         # ==========================================
@@ -119,6 +137,10 @@ def run_engine(market):
         score_data["engine_confidence"] = confidence
 
         score_data["engine"] = "SHIVAY AI PRO v2.5"
+
+        print(
+            f"✅ {symbol} -> PASS | Score={score} | {setup}"
+        )
 
         return score_data
 
