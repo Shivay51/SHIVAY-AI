@@ -1,5 +1,5 @@
 # ==========================================
-# SHIVAY AI PRO v2.5
+# SHIVAY AI PRO v3
 # AI Scanner
 # ==========================================
 
@@ -45,13 +45,16 @@ def scan_market():
             if score_data is None:
                 continue
 
-            score = score_data["score"]
-
-            trade = analyze_trade(symbol, score)
+            trade = analyze_trade(
+                symbol,
+                score_data,
+            )
 
             if trade["decision"] not in (
                 "🔥 STRONG BUY",
                 "✅ BUY",
+                "🔥 STRONG SELL",
+                "🔻 SELL",
             ):
                 continue
 
@@ -81,7 +84,9 @@ def scan_market():
 
                 "target3": plan["target3"],
 
-                "score": score,
+                "score": score_data["score"],
+
+                "regime": score_data["regime"],
 
                 "setup": score_data.get("setup"),
 
@@ -137,7 +142,9 @@ def scan_market():
 
             x["market_strength"],
 
-            x["confidence"]
+            float(
+                str(x["confidence"]).replace("%", "")
+            ),
 
         ),
 

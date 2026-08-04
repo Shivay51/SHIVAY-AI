@@ -47,7 +47,29 @@ def calculate_score(market):
     vol_spike = volume_spike(volume)
 
     # ===================================
-    # Support / Resistance
+    # MARKET REGIME
+    # ===================================
+
+    if e20 > e50 > e200:
+
+        if adx_value >= 25 and st:
+            regime = "🟢 STRONG BULL"
+        else:
+            regime = "🟢 BULL"
+
+    elif e20 < e50 < e200:
+
+        if adx_value >= 25 and not st:
+            regime = "🔴 STRONG BEAR"
+        else:
+            regime = "🔴 BEAR"
+
+    else:
+
+        regime = "🟡 SIDEWAYS"
+
+    # ===================================
+    # SUPPORT / RESISTANCE
     # ===================================
 
     sr = support_resistance(high, low, close)
@@ -59,7 +81,7 @@ def calculate_score(market):
         price,
         atr_value,
         support,
-        resistance
+        resistance,
     )
 
     # ===================================
@@ -119,7 +141,7 @@ def calculate_score(market):
         score += 10
 
     # ===================================
-    # Volume (5)
+    # VOLUME (5)
     # ===================================
 
     if vol_spike:
@@ -135,26 +157,26 @@ def calculate_score(market):
         score += 5
 
     # ===================================
-    # Price Above EMA20 (5)
+    # PRICE ABOVE EMA20 (5)
     # ===================================
 
     if price > e20:
         score += 5
 
     # ===================================
-    # Late Entry (Penalty)
+    # LATE ENTRY
     # ===================================
 
     if not late_entry_filter(
         price,
         day_high,
         day_low,
-        atr_value
+        atr_value,
     ):
         score -= 10
 
     # ===================================
-    # Risk Reward (Penalty)
+    # RISK / REWARD
     # ===================================
 
     if not trade_ok:
@@ -163,6 +185,10 @@ def calculate_score(market):
     score = max(0, min(100, score))
 
     return {
+
+        "price": round(price, 2),
+
+        "regime": regime,
 
         "score": score,
 

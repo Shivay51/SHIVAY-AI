@@ -4,29 +4,34 @@ import pandas as pd
 def breakout_filter(high, low, close, volume):
 
     high = pd.Series(high)
+    low = pd.Series(low)
     close = pd.Series(close)
     volume = pd.Series(volume)
 
-    # Minimum Candles
     if len(close) < 25:
         return False
 
-    # Last 20 Candle Resistance
     resistance = high.iloc[-21:-1].max()
+    support = low.iloc[-21:-1].min()
 
     current_close = close.iloc[-1]
+    previous_close = close.iloc[-2]
 
     current_volume = volume.iloc[-1]
-
     avg_volume = volume.iloc[-20:].mean()
 
-    # Resistance Break
-    breakout = current_close >= resistance * 0.999
+    # BUY Breakout
+    buy_breakout = (
+        current_close >= resistance * 0.998
+        and current_volume >= avg_volume * 1.10
+        and current_close > previous_close
+    )
 
-    # Volume Confirmation
-    volume_ok = current_volume >= avg_volume * 1.20
+    # SELL Breakdown
+    sell_breakdown = (
+        current_close <= support * 1.002
+        and current_volume >= avg_volume * 1.10
+        and current_close < previous_close
+    )
 
-    # Momentum Confirmation
-    momentum = close.iloc[-1] > close.iloc[-2]
-
-    return breakout and volume_ok and momentum
+    return buy_breakout or sell_breakdown

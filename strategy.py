@@ -1,46 +1,74 @@
-def analyze_trade(symbol, score):
+# ==========================================
+# SHIVAY AI PRO v3
+# Strategy Engine
+# ==========================================
 
-    if score >= 95:
+from core.decision_engine import get_decision
 
-        decision = "🔥 STRONG BUY"
-        risk = "VERY LOW"
-        confidence = "98%"
 
-    elif score >= 90:
+def analyze_trade(symbol, score_data):
 
-        decision = "🔥 STRONG BUY"
-        risk = "LOW"
-        confidence = "95%"
+    side = get_decision(score_data)
 
-    elif score >= 85:
+    score = score_data["score"]
 
-        decision = "✅ BUY"
-        risk = "LOW"
-        confidence = "90%"
+    # ==========================================
+    # BUY
+    # ==========================================
 
-    elif score >= 80:
+    if side == "BUY":
 
-        decision = "✅ BUY"
-        risk = "MEDIUM"
-        confidence = "85%"
+        if score >= 95:
 
-    elif score >= 75:
+            decision = "🔥 STRONG BUY"
+            risk = "VERY LOW"
+            confidence = "98%"
 
-        decision = "👀 WATCH"
-        risk = "MEDIUM"
-        confidence = "78%"
+        elif score >= 85:
 
-    elif score >= 65:
+            decision = "✅ BUY"
+            risk = "LOW"
+            confidence = "92%"
 
-        decision = "👀 WATCH"
-        risk = "HIGH"
-        confidence = "68%"
+        else:
+
+            decision = "👀 WATCH"
+            risk = "MEDIUM"
+            confidence = "75%"
+
+    # ==========================================
+    # SELL
+    # ==========================================
+
+    elif side == "SELL":
+
+        if score >= 95:
+
+            decision = "🔥 STRONG SELL"
+            risk = "VERY LOW"
+            confidence = "98%"
+
+        elif score >= 85:
+
+            decision = "🔻 SELL"
+            risk = "LOW"
+            confidence = "92%"
+
+        else:
+
+            decision = "👀 WATCH"
+            risk = "MEDIUM"
+            confidence = "75%"
+
+    # ==========================================
+    # NO TRADE
+    # ==========================================
 
     else:
 
-        decision = "❌ AVOID"
-        risk = "VERY HIGH"
-        confidence = "50%"
+        decision = "👀 WATCH"
+        risk = "HIGH"
+        confidence = "60%"
 
     return {
 

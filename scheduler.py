@@ -1,5 +1,4 @@
 import asyncio
-import os
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -9,6 +8,8 @@ from trade_monitor import (
     add_trade,
     check_trades,
 )
+
+from user_manager import active_users
 
 from config import (
     SCAN_INTERVAL,
@@ -24,7 +25,33 @@ from config import (
 
 load_dotenv()
 
-CHAT_ID = os.getenv("CHAT_ID")
+
+# ==========================================
+# SEND MESSAGE
+# ==========================================
+
+async def send_all(app, text):
+
+    users = active_users()
+
+    if not users:
+
+        print("⚠️ No Active Users")
+
+        return
+
+    for user in users:
+
+        try:
+
+            await app.bot.send_message(
+                chat_id=user["id"],
+                text=text,
+            )
+
+        except Exception as e:
+
+            print(f"❌ Telegram {user['id']} : {e}")
 
 
 # ==========================================
@@ -34,10 +61,6 @@ CHAT_ID = os.getenv("CHAT_ID")
 async def scheduler(app):
 
     print("✅ Auto Scanner Started")
-
-    if not CHAT_ID:
-        print("⚠️ CHAT_ID not found in .env")
-        return
 
     while True:
 
@@ -59,19 +82,13 @@ async def scheduler(app):
                 microsecond=0,
             )
 
-            # ==========================================
-            # MARKET CLOSED
-            # ==========================================
-
             if now < market_start or now > market_end:
 
                 print("⏸ Market Closed")
-                await asyncio.sleep(60)
-                continue
 
-            # ==========================================
-            # SCAN NEW SIGNALS
-            # ==========================================
+                await asyncio.sleep(60)
+
+                continue
 
             print("🔍 Scanning Market...")
 
@@ -90,8 +107,8 @@ async def scheduler(app):
 
 📈 {trade['symbol']}
 
-🔥 Setup : {trade.get('setup', 'N/A')}
-📊 Market : {trade.get('market', 'UNKNOWN')}
+📊 Regime : {trade.get('regime','N/A')}
+🔥 Signal : {trade['decision']}
 
 💰 Entry : ₹{trade['entry']}
 🛑 Stop Loss : ₹{trade['sl']}
@@ -103,25 +120,22 @@ async def scheduler(app):
 ━━━━━━━━━━━━━━
 
 📊 Score : {trade['score']}/100
-📈 Signal : {trade['decision']}
 📉 RSI : {trade['rsi']}
 📏 ATR : {trade['atr']}
+📈 ADX : {trade['adx']}
 🎯 Confidence : {trade['confidence']}
-
-🤖 SHIVAY AI PRO
 """
 
-                    await app.bot.send_message(
-                        chat_id=int(CHAT_ID),
-                        text=message,
+                    await send_all(
+                        app,
+                        message,
                     )
 
-                    print(f"📨 Signal Sent : {trade['symbol']}")
+                    print(f"📨 {trade['symbol']} Sent")
 
             else:
 
                 print("❌ No New Signal")
-
             # ==========================================
             # TRADE MONITOR
             # ==========================================
@@ -182,12 +196,14 @@ async def scheduler(app):
 ❌ Trade Closed
 """
 
-                await app.bot.send_message(
-                    chat_id=int(CHAT_ID),
-                    text=text,
+                await send_all(
+                    app,
+                    text,
                 )
 
-                print(f"📢 {alert['type']} : {alert['symbol']}")
+                print(
+                    f"📢 {alert['type']} : {alert['symbol']}"
+                )
 
         except Exception as e:
 
