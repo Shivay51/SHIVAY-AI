@@ -1,192 +1,114 @@
+"""Short-lived cache of verified Indian index-futures context.
+
+Yahoo remains available elsewhere as an explicitly delayed emergency source, but
+it is never accepted here as an Indian futures feed or used to authorize trades.
+"""
+from __future__ import annotations
+
+import logging
 import time
-import yfinance as yf
+from typing import Any, Mapping
+
 import pandas as pd
-import pandas_ta as ta
 
-# ==========================================
-# CACHE
-# ==========================================
-
-_market_cache = None
-_last_update = 0
-
+LOGGER = logging.getLogger("shivay.market_cache")
 CACHE_TIME = 300
+_market_cache: dict[str, Any] | None = None
+_last_update = 0.0
 
 
-# ==========================================
-# LOAD MARKET
-# ==========================================
+def _verified_future(value: Mapping[str, Any] | None, instrument_type: str) -> bool:
+    if not value or not value.get("verified"):
+        return False
+    quality = value.get("data_quality")
+    quality_ok = isinstance(quality, Mapping) and bool(quality.get("valid"))
+    return (
+        quality_ok
+        and str(value.get("exchange", "")).upper() == "NSE"
+        and str(value.get("segment", "")).upper() == "NSE_FNO"
+        and str(value.get("instrument_type", "")).upper() == instrument_type
+        and bool(value.get("is_live"))
+        and not bool(value.get("is_delayed"))
+        and not bool(value.get("is_stale"))
+    )
 
-def load_market_cache():
 
-    global _market_cache
-    global _last_update
+def _metrics(value: Mapping[str, Any]) -> tuple[float, float, float]:
+    close = pd.Series(value.get("close", []), dtype="float64").dropna()
+    if len(close) < 50:
+        raise ValueError("insufficient_verified_futures_history")
+    price = float(value.get("price", close.iloc[-1]))
+    ema20 = float(close.ewm(span=20, adjust=False, min_periods=20).mean().iloc[-1])
+    ema50 = float(close.ewm(span=50, adjust=False, min_periods=50).mean().iloc[-1])
+    if min(price, ema20, ema50) <= 0:
+        raise ValueError("invalid_verified_futures_values")
+    return price, ema20, ema50
 
+
+def load_market_cache() -> dict[str, Any] | None:
+    global _market_cache, _last_update
     now = time.time()
-
-    if _market_cache is not None and (now - _last_update) < CACHE_TIME:
+    if _market_cache is not None and now - _last_update < CACHE_TIME:
         return _market_cache
-
     try:
+        from provider_manager import get_provider_manager
 
-        nifty = yf.download(
-            "^NSEI",
-            period="5d",
-            interval="15m",
-            auto_adjust=True,
-            progress=False,
-            threads=False,
-        )
-
-        bank = yf.download(
-            "^NSEBANK",
-            period="5d",
-            interval="15m",
-            auto_adjust=True,
-            progress=False,
-            threads=False,
-        )
-
-        if nifty.empty or bank.empty:
+        values = get_provider_manager().get_verified_many(["NIFTY FUT", "BANKNIFTY FUT"], period="5d", interval="5m")
+        nifty, bank = values.get("NIFTY FUT"), values.get("BANKNIFTY FUT")
+        if not _verified_future(nifty, "FUTIDX") or not _verified_future(bank, "FUTIDX"):
+            LOGGER.info("Verified live NSE index futures are unavailable; market context disabled")
+            _market_cache = None
+            _last_update = now
             return None
-
-        if hasattr(nifty.columns, "nlevels") and nifty.columns.nlevels > 1:
-            nifty.columns = nifty.columns.get_level_values(0)
-
-        if hasattr(bank.columns, "nlevels") and bank.columns.nlevels > 1:
-            bank.columns = bank.columns.get_level_values(0)
-
-        nifty_close = pd.Series(nifty["Close"])
-        bank_close = pd.Series(bank["Close"])
-
-        nifty_price = float(nifty_close.iloc[-1])
-        bank_price = float(bank_close.iloc[-1])
-
-        nifty_ema20 = float(ta.ema(nifty_close, length=20).iloc[-1])
-        nifty_ema50 = float(ta.ema(nifty_close, length=50).iloc[-1])
-
-        bank_ema20 = float(ta.ema(bank_close, length=20).iloc[-1])
-        bank_ema50 = float(ta.ema(bank_close, length=50).iloc[-1])
-
-        nifty_bullish = nifty_price > nifty_ema20
-        bank_bullish = bank_price > bank_ema20
-
-        # ==========================================
-        # MARKET DIRECTION
-        # ==========================================
-
+        nifty_price, nifty_ema20, nifty_ema50 = _metrics(nifty)
+        bank_price, bank_ema20, bank_ema50 = _metrics(bank)
+        nifty_bullish, bank_bullish = nifty_price > nifty_ema20, bank_price > bank_ema20
         if nifty_bullish and bank_bullish:
-            direction = "🟢 BULLISH"
-        elif (not nifty_bullish) and (not bank_bullish):
-            direction = "🔴 BEARISH"
+            direction = "BULLISH"
+        elif not nifty_bullish and not bank_bullish:
+            direction = "BEARISH"
         else:
-            direction = "🟡 SIDEWAYS"
-
-        # ==========================================
-        # MARKET STRENGTH
-        # ==========================================
-
-        strength = 0
-
-        if nifty_price > nifty_ema20:
-            strength += 25
-
-        if nifty_price > nifty_ema50:
-            strength += 25
-
-        if bank_price > bank_ema20:
-            strength += 25
-
-        if bank_price > bank_ema50:
-            strength += 25
-
+            direction = "SIDEWAYS"
+        strength = sum((
+            25 if nifty_price > nifty_ema20 else 0,
+            25 if nifty_price > nifty_ema50 else 0,
+            25 if bank_price > bank_ema20 else 0,
+            25 if bank_price > bank_ema50 else 0,
+        ))
         _market_cache = {
-
-            "market_direction": direction,
-            "market_strength": strength,
-
-            "nifty_price": nifty_price,
-            "bank_price": bank_price,
-
-            "nifty_ema20": nifty_ema20,
-            "nifty_ema50": nifty_ema50,
-
-            "bank_ema20": bank_ema20,
-            "bank_ema50": bank_ema50,
-
-            "nifty_bullish": nifty_bullish,
-            "bank_bullish": bank_bullish,
-
+            "market_direction": direction, "market_strength": strength,
+            "nifty_price": nifty_price, "bank_price": bank_price,
+            "nifty_ema20": nifty_ema20, "nifty_ema50": nifty_ema50,
+            "bank_ema20": bank_ema20, "bank_ema50": bank_ema50,
+            "nifty_bullish": nifty_bullish, "bank_bullish": bank_bullish,
+            "verified": True, "is_live": True,
         }
-
-        print("\n========== MARKET STATUS ==========")
-        print(f"Direction       : {direction}")
-        print(f"Market Strength : {strength}/100")
-        print(f"Nifty Price     : {nifty_price:.2f}")
-        print(f"Nifty EMA20     : {nifty_ema20:.2f}")
-        print(f"Nifty EMA50     : {nifty_ema50:.2f}")
-        print(f"Bank Price      : {bank_price:.2f}")
-        print(f"Bank EMA20      : {bank_ema20:.2f}")
-        print(f"Bank EMA50      : {bank_ema50:.2f}")
-        print("===================================\n")
-
         _last_update = now
-
+        LOGGER.info("Verified futures context refreshed: direction=%s strength=%s", direction, strength)
         return _market_cache
-
-    except Exception as e:
-
-        print(f"❌ Market Cache Error : {e}")
-
+    except Exception as error:
+        _market_cache = None
+        _last_update = now
+        LOGGER.warning("Market context refresh failed safely: %s", type(error).__name__)
         return None
 
 
-# ==========================================
-# MARKET FILTER
-# ==========================================
-
-def is_market_bullish():
-
+def is_market_bullish() -> bool:
     data = load_market_cache()
-
-    if data is None:
-        return True
-
-    # Bullish Market
-    if data["market_direction"] == "🟢 BULLISH":
-        return True
-
-    # Sideways Market પણ Allow
-    if data["market_direction"] == "🟡 SIDEWAYS":
-        return True
-
-    # Bearish Market
-    return data["market_strength"] >= 50
+    return bool(data and data["market_direction"] != "BEARISH")
 
 
-# ==========================================
-# MARKET DIRECTION
-# ==========================================
-
-def get_market_direction():
-
+def get_market_direction() -> str:
     data = load_market_cache()
-
-    if data is None:
-        return "UNKNOWN"
-
-    return data["market_direction"]
+    return str(data["market_direction"]) if data else "UNKNOWN"
 
 
-# ==========================================
-# MARKET STRENGTH
-# ==========================================
-
-def get_market_strength():
-
+def get_market_strength() -> int:
     data = load_market_cache()
+    return int(data["market_strength"]) if data else 0
 
-    if data is None:
-        return 0
 
-    return data["market_strength"]
+def clear_market_cache() -> None:
+    global _market_cache, _last_update
+    _market_cache = None
+    _last_update = 0.0

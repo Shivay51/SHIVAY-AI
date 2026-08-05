@@ -1,0 +1,50 @@
+{
+    servers {
+        timeouts {
+            read_body 3s
+            write 3s
+            idle 30s
+        }
+    }
+}
+
+app.vanraj.co.in {
+    encode gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        -Server
+    }
+
+    @health {
+        method GET
+        path /health
+    }
+    handle @health {
+        reverse_proxy 127.0.0.1:8765 {
+            header_up Host {host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto https
+        }
+    }
+
+    @tradingview {
+        method POST
+        path /tradingview-webhook
+    }
+    handle @tradingview {
+        request_body {
+            max_size 32KB
+        }
+        reverse_proxy 127.0.0.1:8765 {
+            header_up Host {host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto https
+        }
+    }
+
+    respond 404
+}

@@ -1,0 +1,14 @@
+{
+  "EXCHANGE:USER_SELECTED_CURRENT_CONTRACT": {
+    "symbol": "NIFTY FUT",
+    "underlying": "NIFTY",
+    "exchange": "NSE",
+    "segment": "NSE_FNO",
+    "instrument_type": "FUTIDX",
+    "expiry": "YYYY-MM-DD",
+    "lot_size": 0,
+    "tick_size": 0,
+    "security_id": "USER_VERIFIED_VALUE",
+    "instrument_key": "USER_VERIFIED_VALUE"
+  }
+}

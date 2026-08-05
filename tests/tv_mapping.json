@@ -1,0 +1,21 @@
+{
+  "TEST:NIFTYCURRENT": {
+    "symbol": "NIFTY FUT",
+    "underlying": "NIFTY",
+    "exchange": "NSE",
+    "segment": "NSE_FNO",
+    "instrument_type": "FUTIDX",
+    "expiry": "2099-12-31",
+    "lot_size": 25,
+    "tick_size": 0.05,
+    "security_id": "SYNTHETIC_TEST_ONLY",
+    "instrument_key": "SYNTHETIC_TEST_ONLY"
+  },
+  "TEST:BANKNIFTYCURRENT": {"symbol":"BANKNIFTY FUT","underlying":"BANKNIFTY","exchange":"NSE","segment":"NSE_FNO","instrument_type":"FUTIDX","expiry":"2099-12-31","lot_size":15,"tick_size":0.05,"security_id":"SYNTHETIC_BANK","instrument_key":"SYNTHETIC_BANK"},
+  "TEST:GOLDCURRENT": {"symbol":"MCX GOLD","underlying":"GOLD","exchange":"MCX","segment":"MCX_COMM","instrument_type":"FUTCOM","expiry":"2099-12-31","lot_size":1,"tick_size":1,"security_id":"SYNTHETIC_GOLD","instrument_key":"SYNTHETIC_GOLD"},
+  "TEST:SILVERCURRENT": {"symbol":"MCX SILVER","underlying":"SILVER","exchange":"MCX","segment":"MCX_COMM","instrument_type":"FUTCOM","expiry":"2099-12-31","lot_size":1,"tick_size":1,"security_id":"SYNTHETIC_SILVER","instrument_key":"SYNTHETIC_SILVER"},
+  "TEST:STOCKCURRENT": {"symbol":"TEST STOCK FUT","underlying":"TESTSTOCK","exchange":"NSE","segment":"NSE_FNO","instrument_type":"FUTSTK","expiry":"2099-12-31","lot_size":100,"tick_size":0.05,"security_id":"SYNTHETIC_STOCK","instrument_key":"SYNTHETIC_STOCK"},
+  "TEST:GIFT": {"symbol":"GIFT NIFTY","exchange":"NSEIX","context_only":true},
+  "TEST:COMEXGOLD": {"symbol":"COMEX GOLD","exchange":"COMEX","context_only":true},
+  "TEST:COMEXSILVER": {"symbol":"COMEX SILVER","exchange":"COMEX","context_only":true}
+}

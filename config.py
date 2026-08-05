@@ -1,3 +1,23 @@
+import os
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+except Exception:
+    pass
+
+
+def _environment_float(*names, default=0.0):
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            try:
+                return float(value.strip())
+            except (TypeError, ValueError):
+                continue
+    return float(default)
+
 # ==========================================
 # SHIVAY AI PRO v2
 # CONFIGURATION
@@ -8,8 +28,16 @@
 # AUTO SCANNER
 # ==========================================
 
-# Scan Every 5 Minutes
-SCAN_INTERVAL = 300
+# Primary strategy runs on completed 15-minute candles.
+PRIMARY_TIMEFRAME_MINUTES = 15
+CONFIRMATION_TIMEFRAMES_MINUTES = (30, 60)
+ENTRY_TIMING_TIMEFRAME_MINUTES = 5
+SCAN_INTERVAL = 900
+MAX_SETUP_AGE_CANDLES = 2
+ENTRY_VALIDITY_MINUTES = 18
+CHANDELIER_SIGNAL_TIMEFRAME = "15m"
+CHANDELIER_CONFIRM_TIMEFRAME = "30m"
+CHANDELIER_TREND_TIMEFRAME = "60m"
 
 
 # ==========================================
@@ -21,6 +49,10 @@ MARKET_START_MINUTE = 15
 
 MARKET_END_HOUR = 15
 MARKET_END_MINUTE = 30
+MCX_START_HOUR = 9
+MCX_START_MINUTE = 0
+MCX_END_HOUR = 23
+MCX_END_MINUTE = 30
 
 
 # ==========================================
@@ -40,7 +72,7 @@ MAX_TRADES = 5
 
 MAX_RISK = 2.0
 
-MIN_RISK_REWARD = 1.20
+MIN_RISK_REWARD = max(1.0, _environment_float("MIN_RISK_REWARD", default=2.0))
 
 
 # ==========================================
@@ -94,8 +126,57 @@ DEBUG = False
 BOT_NAME = "SHIVAY AI PRO"
 
 BOT_VERSION = "2.0"
+SIGNAL_CONFIG_VERSION = "2026.08-observation-1"
 # ==========================================
 # ADMIN
 # ==========================================
 
-ADMIN_ID = 1059748709
+def _environment_int(*names, default=0):
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            try:
+                return int(value.strip())
+            except (TypeError, ValueError):
+                continue
+    return int(default)
+
+
+CHANDELIER_ATR_PERIOD = max(2, _environment_int("CHANDELIER_ATR_PERIOD", default=22))
+CHANDELIER_ATR_MULTIPLIER = max(0.1, _environment_float("CHANDELIER_ATR_MULTIPLIER", default=3.0))
+ENTRY_CONFIRMATION_CANDLES = max(1, _environment_int("ENTRY_CONFIRMATION_CANDLES", default=1))
+ENTRY_BREAK_BUFFER_ATR = max(0.0, _environment_float("ENTRY_BREAK_BUFFER_ATR", default=0.05))
+SIGNAL_MAX_AGE_CANDLES = max(1, _environment_int("SIGNAL_MAX_AGE_CANDLES", default=2))
+
+
+# ADMIN_ID is intentionally sourced at runtime; CHAT_ID remains a backward-compatible
+# fallback for deployments where the administrator is also the notification recipient.
+ADMIN_ID = _environment_int("ADMIN_ID", "CHAT_ID")
+ADMIN_IDS = tuple(
+    int(value.strip())
+    for value in os.getenv("ADMIN_IDS", "").split(",")
+    if value.strip().lstrip("-").isdigit()
+)
+
+PAPER_TRADING = os.getenv("PAPER_TRADING", "true").strip().lower() not in {"0", "false", "no"}
+LIVE_ORDER_PLACEMENT_ENABLED = False
+ENABLE_LIVE_ORDER_PLACEMENT = False
+SIGNALS_ONLY = True
+PAPER_MONITORING = True
+ENABLE_NIGHT_REPORT_REFRESH = False
+RECOVERY_ALERT_AFTER_SECONDS = 600
+ENABLE_RECOVERY_ALERTS = os.getenv("ENABLE_RECOVERY_ALERTS", "false").strip().lower() in {"1", "true", "yes"}
+ENABLE_DHAN = os.getenv("ENABLE_DHAN", "true").strip().lower() not in {"0", "false", "no"}
+
+LATE_EVENING_TIME = os.getenv("LATE_EVENING_TIME", "19:30")
+LATE_NIGHT_TIME = os.getenv("LATE_NIGHT_TIME", "23:00")
+PROVIDER_HEALTH_INTERVAL = max(60, _environment_int("PROVIDER_HEALTH_INTERVAL", default=300))
+MAX_SIGNAL_DATA_DELAY_SECONDS = max(30, _environment_int("MAX_SIGNAL_DATA_DELAY_SECONDS", default=180))
+PROVIDER_PRIORITY = tuple(
+    item.strip().lower()
+    for item in os.getenv(
+        "PROVIDER_PRIORITY",
+        "tradingview_alert_bridge,truedata_primary,gdfl_primary,shoonya_primary,fyers_primary,dhan_primary,upstox_primary,angelone_primary,market_hub,yahoo_emergency",
+    ).split(",")
+    if item.strip()
+)

@@ -1,47 +1,90 @@
 import pandas as pd
-import pandas_ta as ta
+
+from indicators import (
+    ema20,
+    ema50,
+    ema200,
+    atr,
+    supertrend,
+    adx,
+    macd,
+)
 
 
 def pullback_filter(high, low, close):
+    data = pd.DataFrame(
+        {
+            "high": pd.Series(high, dtype="float64"),
+            "low": pd.Series(low, dtype="float64"),
+            "close": pd.Series(close, dtype="float64"),
+        }
+    ).dropna()
 
-    close = pd.Series(close)
-
-    if len(close) < 50:
+    if len(data) < 200:
         return False
 
-    ema20 = ta.ema(close, length=20).iloc[-1]
-    ema50 = ta.ema(close, length=50).iloc[-1]
+    high_values = data["high"].tolist()
+    low_values = data["low"].tolist()
+    close_values = data["close"].tolist()
 
-    price = close.iloc[-1]
-    previous = close.iloc[-2]
+    price = float(close_values[-1])
+    previous_price = float(close_values[-2])
+    current_high = float(high_values[-1])
+    current_low = float(low_values[-1])
 
-    # Trend (BUY અથવા SELL)
-    bullish_trend = ema20 > ema50
-    bearish_trend = ema20 < ema50
+    if price < 200:
+        return False
 
-    # EMA નજીક (2%)
-    near_ema20 = abs(price - ema20) <= (price * 0.02)
+    e20 = ema20(close_values)
+    e50 = ema50(close_values)
+    e200 = ema200(close_values)
+    atr_value = atr(high_values, low_values, close_values)
+    adx_value = adx(high_values, low_values, close_values)
+    macd_buy = macd(close_values)
+    supertrend_buy = supertrend(
+        high_values,
+        low_values,
+        close_values,
+    )
 
-    # Momentum
-    bullish = price > previous
-    bearish = price < previous
+    if atr_value <= 0 or adx_value < 22:
+        return False
 
-    # Support / Resistance Hold
-    support_hold = price >= (ema20 * 0.99)
-    resistance_hold = price <= (ema20 * 1.01)
+    recent_low = min(low_values[-5:])
+    recent_high = max(high_values[-5:])
+    candle_range = current_high - current_low
+    candle_body = abs(price - previous_price)
+    candle_strength = (
+        candle_body / candle_range
+        if candle_range > 0
+        else 0.0
+    )
+
+    bullish_trend = e20 > e50 > e200
+    bearish_trend = e20 < e50 < e200
 
     buy_pullback = (
         bullish_trend
-        and near_ema20
-        and bullish
-        and support_hold
+        and supertrend_buy
+        and macd_buy
+        and price > e20
+        and price > previous_price
+        and recent_low <= e20 + atr_value * 0.30
+        and recent_low >= e50 - atr_value * 0.25
+        and price - e20 <= atr_value * 0.80
+        and candle_strength >= 0.45
     )
 
     sell_pullback = (
         bearish_trend
-        and near_ema20
-        and bearish
-        and resistance_hold
+        and not supertrend_buy
+        and not macd_buy
+        and price < e20
+        and price < previous_price
+        and recent_high >= e20 - atr_value * 0.30
+        and recent_high <= e50 + atr_value * 0.25
+        and e20 - price <= atr_value * 0.80
+        and candle_strength >= 0.45
     )
 
     return buy_pullback or sell_pullback

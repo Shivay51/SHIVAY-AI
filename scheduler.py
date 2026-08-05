@@ -1,212 +1,506 @@
+"""Asynchronous production scheduler for SHIVAY AI."""
+
+from __future__ import annotations
+
 import asyncio
-from datetime import datetime
+import importlib
+import inspect
+import logging
+from contextlib import suppress
+from datetime import date, datetime, time, timedelta
+from typing import Any, Callable, Iterable
+from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
-
-from autoscan import auto_scan
-from trade_monitor import (
-    add_trade,
-    check_trades,
+import config
+from data import force_refresh
+from gift_nifty import (
+    get_gift_nifty_confidence,
+    get_gift_nifty_direction,
+    get_gift_nifty_regime,
+    get_gift_nifty_strength,
 )
-
-from user_manager import active_users
-
-from config import (
-    SCAN_INTERVAL,
-    MARKET_START_HOUR,
-    MARKET_START_MINUTE,
-    MARKET_END_HOUR,
-    MARKET_END_MINUTE,
+from gift_nifty_prediction import predict_opening
+from market_prediction import predict_market
+from performance import get_report
+from scanner import scan_market
+from signal_memory import add_signal, clear_signals, signal_exists
+from signal_ranker import rank_trade
+from telegram_service import (
+    send_buy_signal,
+    send_daily_summary,
+    send_full_exit,
+    send_market_report,
+    send_morning_prediction,
+    send_overnight_report,
+    send_partial_exit,
+    send_sell_signal,
+    send_stoploss_hit,
+    send_target_hit,
+    send_trade_update,
+    send_trailing_update,
+    send_wait_status,
 )
-
-# ==========================================
-# LOAD ENVIRONMENT
-# ==========================================
-
-load_dotenv()
+from trade_monitor import add_trade, check_trades, get_all_trades, remove_trade
+from trade_journal import record_event, record_signal
+from audience_router import recipients
 
 
-# ==========================================
-# SEND MESSAGE
-# ==========================================
+LOGGER = logging.getLogger("shivay.scheduler")
+IST = ZoneInfo("Asia/Kolkata")
 
-async def send_all(app, text):
+_RUNNING_APPLICATIONS: set[int] = set()
+_INSTANCE_LOCK = asyncio.Lock()
+_SCAN_LOCK = asyncio.Lock()
+_MONITOR_LOCK = asyncio.Lock()
+_TRIAL_WARNINGS_SENT: set[str] = set()
+_TRADINGVIEW_STALE_WARNING_AT: datetime | None = None
 
-    users = active_users()
+
+def _cfg(name: str, default: Any) -> Any:
+    return getattr(config, name, default)
+
+
+def _clock(prefix: str, default_hour: int, default_minute: int) -> time:
+    hour = int(_cfg(f"{prefix}_HOUR", default_hour))
+    minute = int(_cfg(f"{prefix}_MINUTE", default_minute))
+    return time(max(0, min(hour, 23)), max(0, min(minute, 59)))
+
+
+MARKET_OPEN = _clock("MARKET_START", 9, 15)
+MARKET_CLOSE = _clock("MARKET_END", 15, 30)
+PREOPEN_TIME = _clock("MORNING_PREDICTION", 8, 45)
+EOD_TIME = _clock("EOD_REPORT", 15, 35)
+OVERNIGHT_TIME = _clock("OVERNIGHT_ANALYSIS", 16, 0)
+LATE_EVENING_TIME = _clock("LATE_EVENING_UPDATE", 19, 30)
+LATE_NIGHT_TIME = _clock("LATE_NIGHT_UPDATE", 23, 0)
+SCAN_SECONDS = max(60, int(_cfg("SCAN_INTERVAL", 300)))
+MONITOR_SECONDS = max(15, int(_cfg("TRADE_MONITOR_INTERVAL", 30)))
+CACHE_SECONDS = max(180, int(_cfg("CACHE_TIME", 300)))
+HEALTH_SECONDS = max(300, int(_cfg("HEALTH_CHECK_INTERVAL", 900)))
+MAX_SIGNALS = max(1, min(int(_cfg("MAX_TRADES", 5)), 5))
+
+
+def _now() -> datetime:
+    return datetime.now(IST)
+
+
+def _market_day(day: date) -> bool:
+    return day.weekday() < 5
+
+
+def _market_open(now: datetime) -> bool:
+    return _market_day(now.date()) and MARKET_OPEN <= now.time() <= MARKET_CLOSE
+
+
+def _mcx_open(now: datetime) -> bool:
+    start = _clock("MCX_START", 9, 0)
+    end = _clock("MCX_END", 23, 30)
+    return _market_day(now.date()) and start <= now.time() <= end
+
+
+def _next_scan_boundary(now: datetime) -> datetime:
+    minutes = max(15, int(_cfg("PRIMARY_TIMEFRAME_MINUTES", 15)))
+    elapsed = now.minute % minutes
+    boundary = now.replace(second=10, microsecond=0) + timedelta(minutes=(minutes - elapsed) % minutes)
+    if boundary <= now:
+        boundary += timedelta(minutes=minutes)
+    return boundary
+
+
+async def _offload(function: Callable[..., Any], *args: Any) -> Any:
+    return await asyncio.to_thread(function, *args)
+
+
+async def _safe_call(label: str, function: Callable[..., Any], *args: Any) -> Any:
+    try:
+        if inspect.iscoroutinefunction(function):
+            return await function(*args)
+        return await _offload(function, *args)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        LOGGER.exception("%s failed", label)
+        return None
+
+
+async def send_all(app: Any, text: str, audience: str = "ALL") -> bool:
+    """Send a plain message to every active user without blocking other users."""
+    users = await _safe_call("load active users", recipients, audience) or []
+
+    async def deliver(user: dict[str, Any]) -> bool:
+        try:
+            await app.bot.send_message(chat_id=user["id"], text=text)
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception("Telegram delivery failed for %s", user.get("id"))
+            return False
 
     if not users:
+        return False
+    return any(await asyncio.gather(*(deliver(user) for user in users)))
 
-        print("⚠️ No Active Users")
 
-        return
+def _side(trade: dict[str, Any]) -> str | None:
+    decision = str(trade.get("decision", trade.get("side", ""))).upper()
+    has_buy = "BUY" in decision
+    has_sell = "SELL" in decision
+    if has_buy == has_sell:
+        return None
+    return "BUY" if has_buy else "SELL"
 
-    for user in users:
 
+def _number(value: Any) -> float:
+    try:
+        return float(str(value).replace("%", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _rank(signals: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rank valid scanner output without adding another restrictive trade gate."""
+    best_by_symbol: dict[str, dict[str, Any]] = {}
+    for original in signals:
+        if not isinstance(original, dict):
+            continue
+        symbol = str(original.get("symbol", "")).strip()
+        side = _side(original)
+        if not symbol or side is None or signal_exists(symbol):
+            continue
+        signal = original.copy()
         try:
+            signal.update(rank_trade(signal))
+        except Exception:
+            LOGGER.exception("Signal ranking failed for %s", symbol)
+        if not signal.get("valid"):
+            continue
+        signal["_side"] = side
+        current = best_by_symbol.get(symbol)
+        key = (
+            _number(signal.get("signal_score", 0)),
+            _number(signal.get("score", 0)),
+            _number(signal.get("confidence", 0)),
+        )
+        if current is None or key > current["_rank_key"]:
+            signal["_rank_key"] = key
+            best_by_symbol[symbol] = signal
+    ranked = sorted(best_by_symbol.values(), key=lambda item: item["_rank_key"], reverse=True)
+    return ranked[:MAX_SIGNALS]
 
-            await app.bot.send_message(
-                chat_id=user["id"],
-                text=text,
-            )
 
-        except Exception as e:
-
-            print(f"❌ Telegram {user['id']} : {e}")
-
-
-# ==========================================
-# SCHEDULER
-# ==========================================
-
-async def scheduler(app):
-
-    print("✅ Auto Scanner Started")
-
-    while True:
-
-        try:
-
-            now = datetime.now().time()
-
-            market_start = now.replace(
-                hour=MARKET_START_HOUR,
-                minute=MARKET_START_MINUTE,
-                second=0,
-                microsecond=0,
-            )
-
-            market_end = now.replace(
-                hour=MARKET_END_HOUR,
-                minute=MARKET_END_MINUTE,
-                second=0,
-                microsecond=0,
-            )
-
-            if now < market_start or now > market_end:
-
-                print("⏸ Market Closed")
-
-                await asyncio.sleep(60)
-
+async def _scan_job(app: Any) -> int:
+    if _SCAN_LOCK.locked():
+        LOGGER.warning("Scan skipped because the previous scan is still running")
+        return 0
+    delivered_count = 0
+    async with _SCAN_LOCK:
+        signals = await _safe_call("market scan", scan_market) or []
+        for trade in _rank(signals):
+            side = trade.pop("_side")
+            trade.pop("_rank_key", None)
+            if trade.get("requires_entry_confirmation") and not trade.get("entry_confirmed"):
+                symbol = str(trade["symbol"])
+                existing = get_all_trades().get(symbol)
+                if existing and not existing.get("closed"):
+                    continue
+                add_trade(trade)
+                record_event("PRELIMINARY_SETUP", trade)
                 continue
+            sender = send_buy_signal if side == "BUY" else send_sell_signal
+            delivered = await _safe_call(f"send {side} signal", sender, app, trade)
+            if delivered:
+                delivered_count += 1
+                trade["telegram_time"] = datetime.now(IST).isoformat()
+                add_signal(str(trade["symbol"]))
+                add_trade(trade)
+                record_signal(trade)
+    return delivered_count
 
-            print("🔍 Scanning Market...")
 
-            signals = auto_scan()
+async def _monitor_job(app: Any) -> None:
+    if _MONITOR_LOCK.locked():
+        return
+    async with _MONITOR_LOCK:
+        alerts = await _safe_call("trade monitoring", check_trades) or []
+        senders = {
+            "TARGET1": send_partial_exit,
+            "TARGET2": send_trailing_update,
+            "TARGET3": send_target_hit,
+            "TARGET HIT": send_target_hit,
+            "STOP LOSS HIT": send_stoploss_hit,
+            "PARTIAL EXIT": send_partial_exit,
+            "FULL EXIT": send_full_exit,
+            "TRAIL STOP LOSS": send_trailing_update,
+        }
+        for alert in alerts:
+            if str(alert.get("type", "")).upper() == "ENTRY CONFIRMED":
+                sender = send_sell_signal if str(alert.get("side", "")).upper() == "SELL" else send_buy_signal
+                delivered = await _safe_call("send confirmed entry", sender, app, alert)
+                if delivered:
+                    symbol = str(alert.get("symbol", ""))
+                    active = get_all_trades().get(symbol)
+                    if active is not None:
+                        active["activation_notified"] = True
+                        active["telegram_time"] = datetime.now(IST).isoformat()
+                    add_signal(symbol)
+                    record_signal(dict(alert))
+                continue
+            sender = senders.get(str(alert.get("type", "")).upper(), send_trade_update)
+            await _safe_call("send trade update", sender, app, alert)
+            if alert.get("closed"):
+                remove_trade(str(alert.get("symbol", "")))
 
-            if signals:
 
-                print(f"✅ {len(signals)} Signal(s) Found")
+def _gift_report() -> dict[str, Any]:
+    prediction = predict_market()
+    prediction.update(
+        gift_nifty_direction=get_gift_nifty_direction(),
+        gift_nifty_regime=get_gift_nifty_regime(),
+        gift_nifty_strength=get_gift_nifty_strength(),
+        gift_nifty_confidence=get_gift_nifty_confidence(),
+        risk_level=prediction.get("market_risk", "N/A"),
+    )
+    return prediction
 
-                for trade in signals:
 
+def _daily_summary() -> dict[str, Any]:
+    report = get_report() or {}
+    return {
+        "trades": report.get("total", 0),
+        "wins": report.get("wins", 0),
+        "losses": report.get("loss", 0),
+        "pnl": report.get("total_pnl", 0),
+    }
+
+
+async def _morning_job(app: Any) -> None:
+    try:
+        module = importlib.import_module("morning_prediction")
+        prediction = await _safe_call("morning prediction", module.generate_morning_prediction)
+        if prediction:
+            await _safe_call("send morning prediction", module.send_morning_prediction, app, prediction)
+    except Exception:
+        LOGGER.exception("Morning-prediction job recovered from a module failure")
+
+
+async def _eod_job(app: Any) -> None:
+    summary = await _safe_call("performance report", _daily_summary)
+    if summary:
+        await _safe_call("send daily summary", send_daily_summary, app, summary)
+    report = await _safe_call("end-of-day market report", predict_market)
+    if report:
+        report = report.copy()
+        report["risk_level"] = report.get("market_risk", "N/A")
+        await _safe_call("send market report", send_market_report, app, report)
+    try:
+        review_module = importlib.import_module("daily_review")
+        review = await _safe_call("daily strategy review", review_module.generate_daily_review)
+        if review:
+            accuracy = review.get("accuracy", {})
+            await send_all(app, "SHIVAY AI | DAILY REVIEW\n\nSample: %s\nWin rate: %s%%\nExpectancy: %s\nProfit factor: %s\nStrategy changed: NO\n\nTuning requires sufficient samples and walk-forward validation." % (accuracy.get("sample_size",0), accuracy.get("win_rate",0), accuracy.get("expectancy",0), accuracy.get("profit_factor",0)), "ADMIN")
+    except Exception:
+        LOGGER.warning("Daily review unavailable")
+
+
+async def _overnight_job(app: Any) -> None:
+    try:
+        module = importlib.import_module("overnight_analysis")
+        report = await _safe_call("overnight analysis", module.analyze_overnight)
+        if report:
+            await _safe_call("send overnight report", module.send_overnight_report, app, report)
+    except Exception:
+        LOGGER.exception("Overnight-analysis job recovered from a module failure")
+
+
+def _optional_modules() -> list[Any]:
+    modules = []
+    for name in ("gold", "silver", "mcx", "mcx_scanner", "commodity_scanner", "gold_silver", "metal_scanner"):
+        try:
+            modules.append(importlib.import_module(name))
+        except ModuleNotFoundError as error:
+            if error.name != name:
+                LOGGER.warning("Optional module %s could not load: %s", name, error)
+        except Exception:
+            LOGGER.exception("Optional module %s could not load", name)
+    return modules
+
+
+async def _optional_market_job(app: Any, modules: list[Any]) -> None:
+    for module in modules:
+        function = next(
+            (getattr(module, name, None) for name in ("scheduled_task", "run_scheduled_tasks", "scan_gold", "scan_silver", "scan_market", "scan_mcx") if callable(getattr(module, name, None))),
+            None,
+        )
+        if function is None:
+            continue
+        result = await _safe_call(f"optional task {module.__name__}", function)
+        report_sender = getattr(module, f"send_{module.__name__}_report", None)
+        if isinstance(result, dict) and callable(report_sender):
+            await _safe_call(f"send {module.__name__} report", report_sender, app, result)
+        elif isinstance(result, str) and result.strip():
+            await send_all(app, result)
+        elif isinstance(result, list):
+            for trade in _rank(item for item in result if isinstance(item, dict)):
+                side = trade.pop("_side")
+                trade.pop("_rank_key", None)
+                sender = send_buy_signal if side == "BUY" else send_sell_signal
+                if await _safe_call("send optional signal", sender, app, trade):
+                    add_signal(str(trade["symbol"]))
                     add_trade(trade)
 
-                    message = f"""
-🔱 SHIVAY AI PRO
 
-📈 {trade['symbol']}
+async def _health_job() -> None:
+    users = await _safe_call("scheduler health users", recipients, "ALL")
+    trades = get_all_trades()
+    for symbol, trade in list(trades.items()):
+        if trade.get("closed"):
+            remove_trade(symbol)
+    LOGGER.info("Scheduler healthy: users=%s active_trades=%s", len(users or []), len(get_all_trades()))
 
-📊 Regime : {trade.get('regime','N/A')}
-🔥 Signal : {trade['decision']}
 
-💰 Entry : ₹{trade['entry']}
-🛑 Stop Loss : ₹{trade['sl']}
+async def _provider_health_job(app: Any, notify: bool = False) -> None:
+    global _TRADINGVIEW_STALE_WARNING_AT
+    try:
+        from provider_health import provider_health_summary
+        from provider_manager import get_provider_status
+        summary, status = provider_health_summary(), get_provider_status()
+        active = status.get("active_provider", status.get("selected_primary"))
+        LOGGER.info("Provider health: active=%s mode=%s healthy=%s degraded=%s", active, status.get("mode"), summary.get("healthy"), summary.get("degraded"))
+        if notify and summary.get("degraded"):
+            await send_all(app, "DATA PROVIDER WARNING\n\nActive: %s\nMode: %s\nHealthy: %s\nDegraded: %s\nNew signals remain blocked when data is stale or invalid." % (active or "NONE", status.get("mode","NO DATA"), summary.get("healthy",0), summary.get("degraded",0)), "ADMIN")
+        if notify:
+            for name in ("truedata", "gdfl"):
+                expires = (status.get(name) or {}).get("trial_expires_at")
+                if not expires or name in _TRIAL_WARNINGS_SENT:
+                    continue
+                try:
+                    remaining = datetime.fromisoformat(expires.replace("Z", "+00:00")) - datetime.now().astimezone()
+                    if remaining <= timedelta(days=2):
+                        await send_all(app, f"{name.upper()} TRIAL NOTICE\n\nThe configured market-data trial expires soon. Signals will fail over automatically and remain blocked when no verified Indian feed is available.", "ADMIN")
+                        _TRIAL_WARNINGS_SENT.add(name)
+                except (TypeError, ValueError):
+                    continue
+            try:
+                from tradingview_webhook import status as tradingview_status
+                tv = tradingview_status()
+                last = (tv.get("cache") or {}).get("last_received")
+                if tv.get("enabled") and last:
+                    stale_after = max(30, int(_cfg("MAX_SIGNAL_DATA_DELAY_SECONDS", 180)))
+                    is_stale = (_now().astimezone(last.tzinfo) - last).total_seconds() > stale_after
+                    cooldown_ready = _TRADINGVIEW_STALE_WARNING_AT is None or (_now() - _TRADINGVIEW_STALE_WARNING_AT).total_seconds() >= 3600
+                    if is_stale and cooldown_ready:
+                        await send_all(app, "TRADINGVIEW ALERT BRIDGE WARNING\n\nThe authorized alert feed is stale. New exact signals are blocked until fresh verified alerts resume.", "ADMIN")
+                        _TRADINGVIEW_STALE_WARNING_AT = _now()
+            except Exception:
+                LOGGER.warning("TradingView bridge health check unavailable")
+    except Exception:
+        LOGGER.warning("Provider health check unavailable")
 
-🥇 Target 1 : ₹{trade['target1']}
-🥈 Target 2 : ₹{trade['target2']}
-🥉 Target 3 : ₹{trade['target3']}
 
-━━━━━━━━━━━━━━
+async def _late_update_job(app: Any, label: str) -> None:
+    try:
+        module = importlib.import_module("overnight_analysis")
+        report = await _safe_call(label, lambda: module.analyze_overnight(force_refresh=True))
+        if report:
+            report = report.copy()
+            report["update_type"] = label
+            await _safe_call(f"send {label}", send_overnight_report, app, report)
+    except Exception:
+        LOGGER.exception("Late update recovered from an analysis failure")
+    await _provider_health_job(app, notify=True)
 
-📊 Score : {trade['score']}/100
-📉 RSI : {trade['rsi']}
-📏 ATR : {trade['atr']}
-📈 ADX : {trade['adx']}
-🎯 Confidence : {trade['confidence']}
-"""
 
-                    await send_all(
-                        app,
-                        message,
-                    )
+def _due(now: datetime, scheduled: time, completed: set[tuple[str, date]], name: str) -> bool:
+    key = (name, now.date())
+    return _market_day(now.date()) and now.time() >= scheduled and key not in completed
 
-                    print(f"📨 {trade['symbol']} Sent")
 
-            else:
+def _startup_completed(now: datetime) -> set[tuple[str, date]]:
+    """Mark past report slots complete so a restart never floods historical reports."""
+    slots = {
+        "morning": PREOPEN_TIME, "eod": EOD_TIME, "overnight": OVERNIGHT_TIME,
+        "late_evening": LATE_EVENING_TIME, "late_night": LATE_NIGHT_TIME,
+    }
+    return {(name, now.date()) for name, scheduled in slots.items() if now.time() >= scheduled}
 
-                print("❌ No New Signal")
-            # ==========================================
-            # TRADE MONITOR
-            # ==========================================
 
-            alerts = check_trades()
+async def scheduler(application: Any) -> None:
+    """Run SHIVAY AI jobs for a python-telegram-bot Application."""
+    application_id = id(application)
+    async with _INSTANCE_LOCK:
+        if application_id in _RUNNING_APPLICATIONS:
+            LOGGER.warning("Duplicate scheduler start ignored")
+            return
+        _RUNNING_APPLICATIONS.add(application_id)
 
-            for alert in alerts:
+    started_at = _now()
+    completed: set[tuple[str, date]] = _startup_completed(started_at)
+    optional_modules = _optional_modules()
+    last_day = started_at.date()
+    next_scan = _next_scan_boundary(started_at)
+    next_monitor = started_at
+    next_cache = started_at
+    next_health = started_at + timedelta(seconds=HEALTH_SECONDS)
+    next_optional = started_at + timedelta(seconds=SCAN_SECONDS)
+    LOGGER.info("SHIVAY AI scheduler started in Asia/Kolkata")
 
-                if alert["type"] == "TARGET1":
+    try:
+        while True:
+            now = _now()
+            if now.date() != last_day:
+                clear_signals()
+                completed = {item for item in completed if item[1] >= now.date() - timedelta(days=1)}
+                last_day = now.date()
 
-                    text = f"""
-🎯 TARGET 1 HIT
+            if _due(now, PREOPEN_TIME, completed, "morning") and now.time() < MARKET_OPEN:
+                await _morning_job(application)
+                completed.add(("morning", now.date()))
 
-📈 {alert['symbol']}
+            if _market_open(now):
+                if now >= next_cache:
+                    await _safe_call("market cache refresh", force_refresh)
+                    next_cache = now + timedelta(seconds=CACHE_SECONDS)
+                if now >= next_scan:
+                    await _scan_job(application)
+                    next_scan = _next_scan_boundary(_now())
+                if now >= next_monitor:
+                    await _monitor_job(application)
+                    next_monitor = _now() + timedelta(seconds=MONITOR_SECONDS)
 
-💰 Current Price : ₹{alert['price']}
+            if optional_modules and _mcx_open(now) and now >= next_optional:
+                await _optional_market_job(application, optional_modules)
+                next_optional = _now() + timedelta(seconds=SCAN_SECONDS)
 
-🛡 Stop Loss moved to Break-even
+            if _due(now, EOD_TIME, completed, "eod"):
+                await _eod_job(application)
+                completed.add(("eod", now.date()))
 
-🛑 New SL : ₹{alert['new_sl']}
-"""
+            if _due(now, OVERNIGHT_TIME, completed, "overnight"):
+                await _overnight_job(application)
+                completed.add(("overnight", now.date()))
 
-                elif alert["type"] == "TARGET2":
+            if bool(_cfg("ENABLE_NIGHT_REPORT_REFRESH", False)) and _due(now, LATE_EVENING_TIME, completed, "late_evening"):
+                await _late_update_job(application, "Late-evening GIFT NIFTY update")
+                completed.add(("late_evening", now.date()))
 
-                    text = f"""
-🥈 TARGET 2 HIT
+            if bool(_cfg("ENABLE_NIGHT_REPORT_REFRESH", False)) and _due(now, LATE_NIGHT_TIME, completed, "late_night"):
+                await _late_update_job(application, "Late-night next-session update")
+                completed.add(("late_night", now.date()))
 
-📈 {alert['symbol']}
+            if now >= next_health:
+                await _health_job()
+                await _provider_health_job(application)
+                next_health = _now() + timedelta(seconds=HEALTH_SECONDS)
 
-💰 Current Price : ₹{alert['price']}
-
-📈 Trailing Stop Activated
-
-🛑 New SL : ₹{alert['new_sl']}
-"""
-
-                elif alert["type"] == "TARGET3":
-
-                    text = f"""
-🏆 TARGET 3 HIT
-
-📈 {alert['symbol']}
-
-💰 Exit Price : ₹{alert['price']}
-
-🎉 Trade Closed Successfully
-"""
-
-                else:
-
-                    text = f"""
-🛑 STOP LOSS HIT
-
-📉 {alert['symbol']}
-
-💰 Exit Price : ₹{alert['price']}
-
-❌ Trade Closed
-"""
-
-                await send_all(
-                    app,
-                    text,
-                )
-
-                print(
-                    f"📢 {alert['type']} : {alert['symbol']}"
-                )
-
-        except Exception as e:
-
-            print(f"❌ Scheduler Error : {e}")
-
-        await asyncio.sleep(SCAN_INTERVAL)
+            await asyncio.sleep(5)
+    except asyncio.CancelledError:
+        LOGGER.info("SHIVAY AI scheduler stopped")
+        raise
+    except Exception:
+        LOGGER.exception("Scheduler stopped after an unexpected loop failure; supervisor will restart it")
+        with suppress(asyncio.CancelledError):
+            await asyncio.sleep(10)
+    finally:
+        async with _INSTANCE_LOCK:
+            _RUNNING_APPLICATIONS.discard(application_id)

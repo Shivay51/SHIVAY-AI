@@ -1,133 +1,134 @@
-import asyncio
+"""Telegram entry point and lifecycle integration for SHIVAY AI."""
+from __future__ import annotations
+
+import logging
 import os
+import re
+from pathlib import Path
 
 from dotenv import load_dotenv
-from telegram.ext import (
-    Application,
-    CommandHandler,
-)
+from telegram import Update
+from telegram.ext import Application, ContextTypes
 
-from commands import (
-    start,
-    help_command,
-    status,
-    scan,
-    id_command,
-    adduser,
-    removeuser,
-    listusers,
-)
+PROJECT_ROOT = Path(__file__).resolve().parent
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 
-from scheduler import scheduler
+import app_logging
+import auto_recovery
+import cleanup
+import config
+import startup as lifecycle
+
+LOGGER = logging.getLogger("shivay.bot")
+TOKEN_PATTERN = re.compile(r"\d{6,}:[A-Za-z0-9_-]{20,}")
+app: Application | None = None
 
 
-# ==========================================
-# LOAD ENVIRONMENT
-# ==========================================
-
-load_dotenv(".env", override=True)
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-
-if BOT_TOKEN is None:
-    raise ValueError("❌ BOT_TOKEN not found in .env")
-
-print(f"✅ CHAT_ID : {CHAT_ID}")
+def _load_token() -> str:
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+    token = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        raise RuntimeError("BOT_TOKEN is not configured")
+    if not TOKEN_PATTERN.fullmatch(token):
+        raise RuntimeError("BOT_TOKEN has an invalid format")
+    return token
 
 
-# ==========================================
-# CREATE BOT
-# ==========================================
-
-app = Application.builder().token(BOT_TOKEN).build()
-
-
-# ==========================================
-# COMMANDS
-# ==========================================
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("help", help_command))
-app.add_handler(CommandHandler("status", status))
-app.add_handler(CommandHandler("scan", scan))
-app.add_handler(CommandHandler("id", id_command))
-
-# User Management
-app.add_handler(CommandHandler("adduser", adduser))
-app.add_handler(CommandHandler("removeuser", removeuser))
-app.add_handler(CommandHandler("listusers", listusers))
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    error = context.error
+    LOGGER.error("Telegram update failed safely: %s", type(error).__name__ if error else "UnknownError")
+    if isinstance(update, Update) and update.effective_message is not None:
+        try:
+            await update.effective_message.reply_text("The request could not be completed safely. Please try again shortly.")
+        except Exception:
+            LOGGER.warning("Could not deliver the generic command-error response")
 
 
-# ==========================================
-# STARTUP
-# ==========================================
-
-async def on_startup(application):
-
-    print("=" * 60)
-    print("🔱 SHIVAY AI Started Successfully")
-    print("🤖 Telegram Connected")
-    print("📈 Scanner Ready")
-    print("⚡ Auto Scanner Started")
-    print("=" * 60)
-
+async def on_startup(application: Application) -> None:
+    """Initialize supervised services and send exactly one admin startup card."""
     try:
-
-        if CHAT_ID:
-
-            await application.bot.send_message(
-
-                chat_id=int(CHAT_ID),
-
-                text=(
-
-                    "🟢 SHIVAY AI PRO v3\n\n"
-
-                    "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-                    "✅ BOT ONLINE\n\n"
-
-                    "🤖 Telegram      : Connected ✅\n"
-
-                    "📡 Data Feed     : Connected ✅\n"
-
-                    "📊 Exchange      : Connected ✅\n"
-
-                    "⚡ Scanner       : Ready ✅\n"
-
-                    "🛡 AI Engine     : Ready ✅\n\n"
-
-                    "📦 Version       : v3.0\n"
-
-                    "🟢 Status        : ONLINE\n\n"
-
-                    "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-                    "🚀 Waiting For Market..."
-
-                )
-
+        state = await lifecycle.startup(application)
+        await auto_recovery.start_auto_recovery(application)
+        await cleanup.start_cleanup_scheduler()
+        from tradingview_webhook import start_tradingview_webhook, startup_self_check
+        await start_tradingview_webhook(application)
+        check = await startup_self_check()
+        application.bot_data["tradingview_webhook_health"] = check
+        application.bot_data["shivay_enabled"] = True
+        LOGGER.info(
+            "Webhook self-check: server=%s health=%s enabled=%s token=%s symbols=%s signals_only=%s",
+            check["server_running"], check["local_health"], check["webhook_enabled"], check["token_configured"],
+            check["enabled_symbols"], check["signals_only"],
+        )
+        try:
+            import admin
+            cache = check.get("cache") if isinstance(check.get("cache"), dict) else {}
+            webhook_state = "Connected" if check.get("server_running") and check.get("local_health") else "Waiting"
+            tradingview_state = "Connected" if check.get("enabled_symbols") and cache.get("last_received") else "Waiting"
+            await admin.notify_admins(
+                application,
+                "\U0001f510 SHIVAY AI ADMIN\n\n"
+                "\U0001f7e2 SHIVAY AI ACTIVE\n\n"
+                "Telegram: Connected\n"
+                "Scanner: Active\n"
+                "Scheduler: Active\n"
+                f"Webhook: {webhook_state}\n"
+                f"TradingView: {tradingview_state}\n"
+                "Mode: Signals Only",
             )
-
-    except Exception as e:
-
-        print(f"❌ Startup Message Error : {e}")
-
-    asyncio.create_task(
-        scheduler(application)
-    )
-
-
-app.post_init = on_startup
+        except Exception:
+            LOGGER.warning("Startup admin notification was not delivered")
+        LOGGER.info("SHIVAY AI startup completed: %s", state.get("state", "READY"))
+    except Exception:
+        LOGGER.exception("SHIVAY AI could not complete critical startup")
+        await cleanup.stop_cleanup_scheduler()
+        await auto_recovery.stop_auto_recovery(application)
+        await lifecycle.shutdown(application)
+        raise
 
 
-# ==========================================
-# RUN BOT
-# ==========================================
+async def on_shutdown(application: Application) -> None:
+    from tradingview_webhook import stop_tradingview_webhook
+    await stop_tradingview_webhook()
+    await cleanup.stop_cleanup_scheduler()
+    await auto_recovery.stop_auto_recovery(application)
+    await lifecycle.shutdown(application)
+    LOGGER.info("SHIVAY AI shutdown completed")
 
-print("🚀 Starting SHIVAY AI...\n")
 
-app.run_polling(
-    drop_pending_updates=True
-)
+def build_application(token: str | None = None) -> Application:
+    application = Application.builder().token(token or _load_token()).post_init(on_startup).post_shutdown(on_shutdown).build()
+    application.add_error_handler(error_handler)
+    return application
+
+
+def run_bot() -> None:
+    global app
+    if (bool(getattr(config, "LIVE_ORDER_PLACEMENT_ENABLED", False))
+            or bool(getattr(config, "ENABLE_LIVE_ORDER_PLACEMENT", False))
+            or not bool(getattr(config, "SIGNALS_ONLY", True))
+            or not bool(getattr(config, "PAPER_MONITORING", True))):
+        raise RuntimeError("Unsafe execution configuration rejected: SHIVAY AI must run signals-only")
+    app_logging.setup_logging()
+    app = build_application()
+    LOGGER.info("Starting SHIVAY AI Telegram polling")
+    try:
+        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    except KeyboardInterrupt:
+        LOGGER.info("Shutdown requested from the console")
+    except Exception:
+        LOGGER.exception("Telegram polling stopped unexpectedly")
+        raise
+    finally:
+        app_logging.shutdown_logging()
+
+
+def main() -> None:
+    run_bot()
+
+
+if __name__ == "__main__":
+    main()
+
+
+__all__ = ["app", "build_application", "run_bot", "main", "on_startup", "on_shutdown", "error_handler"]

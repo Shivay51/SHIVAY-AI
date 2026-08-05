@@ -1,6 +1,8 @@
 import yfinance as yf
+from yahoo_runtime import configure_yfinance
+
+configure_yfinance(yf)
 import pandas as pd
-import pandas_ta as ta
 
 from data import SYMBOLS
 
@@ -21,6 +23,7 @@ def higher_timeframe_trend(symbol):
             progress=False,
             auto_adjust=True,
             threads=False,
+            timeout=8,
         )
 
         if df.empty:
@@ -31,8 +34,8 @@ def higher_timeframe_trend(symbol):
 
         close = pd.Series(df["Close"])
 
-        ema20 = ta.ema(close, length=20).iloc[-1]
-        ema50 = ta.ema(close, length=50).iloc[-1]
+        ema20 = close.ewm(span=20, adjust=False, min_periods=20).mean().iloc[-1]
+        ema50 = close.ewm(span=50, adjust=False, min_periods=50).mean().iloc[-1]
 
         return ema20 > ema50
 

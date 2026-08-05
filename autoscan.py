@@ -1,8 +1,12 @@
+import logging
+
 from scanner import scan_market
 from signal_memory import (
     signal_exists,
     add_signal,
 )
+
+LOGGER = logging.getLogger("shivay.autoscan")
 
 
 # ==========================================
@@ -49,6 +53,6 @@ def auto_scan():
 
     except Exception as e:
 
-        print(f"❌ Auto Scan Error : {e}")
+        LOGGER.warning("Auto scan recovered from %s", type(e).__name__)
 
         return []

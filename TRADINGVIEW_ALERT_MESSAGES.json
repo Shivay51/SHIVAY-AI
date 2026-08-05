@@ -1,0 +1,10 @@
+{
+  "description": "Official TradingView standard-alert webhook messages. Replace only the angle-bracket placeholders. Never commit the real secret.",
+  "webhook_url": "https://app.vanraj.co.in/tradingview-webhook",
+  "templates": {
+    "5_minute": "{\"secret\":\"<PASTE_LOCAL_WEBHOOK_SECRET>\",\"source\":\"TRADINGVIEW_STANDARD_ALERT\",\"event_id\":\"{{ticker}}-5-{{time}}\",\"symbol\":\"{{ticker}}\",\"exchange\":\"{{exchange}}\",\"category\":\"<CATEGORY>\",\"contract\":\"<EXACT_CONTRACT>\",\"timeframe\":\"5\",\"open\":{{open}},\"high\":{{high}},\"low\":{{low}},\"close\":{{close}},\"volume\":{{volume}},\"bar_time\":\"{{time}}\"}",
+    "15_minute": "{\"secret\":\"<PASTE_LOCAL_WEBHOOK_SECRET>\",\"source\":\"TRADINGVIEW_STANDARD_ALERT\",\"event_id\":\"{{ticker}}-15-{{time}}\",\"symbol\":\"{{ticker}}\",\"exchange\":\"{{exchange}}\",\"category\":\"<CATEGORY>\",\"contract\":\"<EXACT_CONTRACT>\",\"timeframe\":\"15\",\"open\":{{open}},\"high\":{{high}},\"low\":{{low}},\"close\":{{close}},\"volume\":{{volume}},\"bar_time\":\"{{time}}\"}",
+    "30_minute": "{\"secret\":\"<PASTE_LOCAL_WEBHOOK_SECRET>\",\"source\":\"TRADINGVIEW_STANDARD_ALERT\",\"event_id\":\"{{ticker}}-30-{{time}}\",\"symbol\":\"{{ticker}}\",\"exchange\":\"{{exchange}}\",\"category\":\"<CATEGORY>\",\"contract\":\"<EXACT_CONTRACT>\",\"timeframe\":\"30\",\"open\":{{open}},\"high\":{{high}},\"low\":{{low}},\"close\":{{close}},\"volume\":{{volume}},\"bar_time\":\"{{time}}\"}",
+    "60_minute": "{\"secret\":\"<PASTE_LOCAL_WEBHOOK_SECRET>\",\"source\":\"TRADINGVIEW_STANDARD_ALERT\",\"event_id\":\"{{ticker}}-60-{{time}}\",\"symbol\":\"{{ticker}}\",\"exchange\":\"{{exchange}}\",\"category\":\"<CATEGORY>\",\"contract\":\"<EXACT_CONTRACT>\",\"timeframe\":\"60\",\"open\":{{open}},\"high\":{{high}},\"low\":{{low}},\"close\":{{close}},\"volume\":{{volume}},\"bar_time\":\"{{time}}\"}"
+  }
+}

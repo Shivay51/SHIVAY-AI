@@ -1,4 +1,6 @@
 # ==========================================
+
+from config import MIN_SCORE
 # SHIVAY AI PRO v3
 # BUY Engine
 # ==========================================
@@ -10,17 +12,14 @@ def check_buy(score_data):
     # Market Regime
     # ==========================================
 
-    if score_data["regime"] not in (
-        "🟢 STRONG BULL",
-        "🟢 BULL",
-    ):
+    if "BULL" not in str(score_data.get("regime", "")).upper():
         return False
 
     # ==========================================
     # Score
     # ==========================================
 
-    if score_data["score"] < 80:
+    if score_data["score"] < max(72, int(MIN_SCORE)):
         return False
 
     # ==========================================
@@ -37,7 +36,7 @@ def check_buy(score_data):
     # RSI
     # ==========================================
 
-    if score_data["rsi"] < 55:
+    if score_data["rsi"] < 52:
         return False
 
     if score_data["rsi"] > 75:
@@ -69,6 +68,19 @@ def check_buy(score_data):
     # ==========================================
 
     if not score_data["supertrend"]:
+        return False
+
+    if score_data.get("timeframe_60m") != "BULLISH":
+        return False
+    if score_data.get("timeframe_30m") != "BULLISH":
+        return False
+    if score_data.get("timeframe_15m") != "BULLISH":
+        return False
+    if score_data.get("timeframe_5m") not in {"BULLISH", "SIDEWAYS"}:
+        return False
+    if not bool(score_data.get("volume_spike", False)):
+        return False
+    if float(score_data.get("relative_volume", 0) or 0) < 1.0:
         return False
 
     return True

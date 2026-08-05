@@ -3,6 +3,8 @@
 # AI Scanner
 # ==========================================
 
+import logging
+
 from ai_watchlist import get_ai_watchlist
 from sector_strength import (
     get_sector,
@@ -10,11 +12,17 @@ from sector_strength import (
 )
 
 from data import get_market_data
+from data_quality import assess_market_data
 from engine import run_engine
 from strategy import analyze_trade
 from tradeplan import create_trade_plan
+from entry_validity import evaluate_entry_validity
+from trade_journal import record_rejection
+from chandelier_exit import get_completed_signal_candle
 
 from config import MAX_TRADES
+
+LOGGER = logging.getLogger("shivay.scanner")
 
 
 def scan_market():
@@ -25,8 +33,7 @@ def scan_market():
 
     watchlist = get_ai_watchlist()
 
-    print(f"\n🔍 AI Scanner Started")
-    print(f"📊 Total Stocks : {len(watchlist)}")
+    LOGGER.info("AI scanner started for %d instruments", len(watchlist))
 
     for symbol in watchlist:
 
@@ -38,6 +45,10 @@ def scan_market():
             market = get_market_data(symbol)
 
             if market is None:
+                continue
+
+            quality = assess_market_data(market)
+            if not quality["valid"]:
                 continue
 
             score_data = run_engine(market)
@@ -62,7 +73,18 @@ def scan_market():
                 market["price"],
                 score_data["atr"],
                 trade["decision"],
+                score_data,
             )
+
+            side = "BUY" if "BUY" in trade["decision"] else "SELL"
+            validity = evaluate_entry_validity(market, side, plan, score_data)
+            if not validity["valid"]:
+                record_rejection(symbol, validity["reasons"], {"side": side, "setup": score_data.get("setup"), "provider": market.get("provider"), "delay_seconds": quality.get("delay_seconds")})
+                continue
+            signal_candle = get_completed_signal_candle(market, 15)
+            if signal_candle is None:
+                record_rejection(symbol, ["missing_completed_signal_candle"], {"side": side})
+                continue
 
             results.append({
 
@@ -114,6 +136,20 @@ def scan_market():
 
                 "volume_spike": score_data["volume_spike"],
 
+                "relative_volume": score_data.get("relative_volume"),
+
+                "timeframe_5m": score_data.get("timeframe_5m", "UNKNOWN"),
+
+                "timeframe_15m": score_data.get("timeframe_15m", "UNKNOWN"),
+
+                "timeframe_30m": score_data.get("timeframe_30m", "UNKNOWN"),
+
+                "timeframe_60m": score_data.get("timeframe_60m", "UNKNOWN"),
+
+                "timeframe_aligned": bool(score_data.get("timeframe_aligned", False)),
+
+                "entry_timing_confirmed": bool(score_data.get("entry_timing_confirmed", False)),
+
                 "support": score_data["support"],
 
                 "resistance": score_data["resistance"],
@@ -124,13 +160,78 @@ def scan_market():
 
                 "confidence": trade["confidence"],
 
+                "provider": market.get("provider", "UNKNOWN"),
+
+                "data_timestamp": market.get("timestamp"),
+
+                "is_live": bool(market.get("is_live", False)),
+
+                "is_delayed": bool(market.get("is_delayed", True)),
+
+                "delay_seconds": quality.get("delay_seconds"),
+
+                "freshness_status": quality.get("status", "REJECTED"),
+
+                "data_quality": market.get("data_quality", quality),
+
+                "instrument_type": market.get("instrument_type", "UNKNOWN"),
+
+                "market_category": "MCX" if market.get("segment") == "MCX_COMM" else "NSE F&O",
+
+                "segment": market.get("segment", "UNKNOWN"),
+
+                "sector_strength": sector_priority(symbol),
+
+                "relative_strength": score_data.get("relative_strength"),
+
+                "relative_weakness": score_data.get("market_brain", {}).get("relative_weakness"),
+
+                "smart_money_activity": score_data.get("market_brain", {}).get("instrument", {}).get("smart_money_activity"),
+
+                "signal_context_score": score_data.get("signal_context_score"),
+
+                "market_brain": score_data.get("market_brain", {}),
+
+                "nifty_direction": score_data.get("market", "UNKNOWN"),
+
+                "banknifty_direction": score_data.get("market", "UNKNOWN"),
+
+                "expiry": market.get("expiry"),
+
+                "timestamp": market.get("timestamp"),
+
+                "freshness": quality.get("status", "REJECTED"),
+
+                "entry_zone": plan.get("entry_zone", (plan["entry"], plan["entry"])),
+
+                "risk_reward": validity["current_risk_reward"],
+
+                "valid_until": validity["valid_until"],
+
+                "invalidation_condition": validity["invalidation_condition"],
+
+                "entry_validity": validity,
+
+                "market_data": market,
+                "entry_confirmed": False,
+                "requires_entry_confirmation": True,
+                "signal_candle": signal_candle,
+                "signal_candle_high": signal_candle["high"],
+                "signal_candle_low": signal_candle["low"],
+                "signal_candle_close": signal_candle["close"],
+                "signal_candle_timestamp": signal_candle.get("timestamp"),
+                "entry_trigger_status": "PENDING",
+                "chandelier_15m": score_data.get("chandelier_15m"),
+                "chandelier_30m": score_data.get("chandelier_30m"),
+                "chandelier_60m": score_data.get("chandelier_60m"),
+
             })
 
             scanned.add(symbol)
 
         except Exception as e:
 
-            print(f"❌ {symbol} : {e}")
+            LOGGER.warning("Scan recovered for %s: %s", symbol, type(e).__name__)
 
     results.sort(
 
@@ -152,6 +253,6 @@ def scan_market():
 
     )
 
-    print(f"✅ Signals Found : {len(results)}")
+    LOGGER.info("Scan completed with %d ranked signals", len(results))
 
     return results[:MAX_TRADES]

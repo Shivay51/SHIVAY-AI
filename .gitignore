@@ -4,13 +4,47 @@ __pycache__/
 
 # Environment
 .env
+*.key
+*.secret
+tokens/
+credentials/
+secrets/
+local_config/
 
 # VS Code
 .vscode/
 
 # Logs
 *.log
+cache/
+vendor/
+.shivay_ai.lock
+cleanup_state.json
+storage/
+users.json
+chat_ids.json
+security_audit.jsonl
+*.zip
+*.tmp
+.pytest_cache/
+.coverage
 
 # OS
 .DS_Store
 Thumbs.db
+.env
+users.json
+chat_ids.json
+*.log
+logs/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite
+*.sqlite3
+*.lock
+cache/
+runtime/
+cloudflared.exe
+SHIVAY_AI_V10_SAFE_BACKUP.zip
