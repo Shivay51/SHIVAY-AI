@@ -62,19 +62,14 @@ async def on_startup(application: Application) -> None:
         )
         try:
             import admin
-            cache = check.get("cache") if isinstance(check.get("cache"), dict) else {}
-            webhook_state = "Connected" if check.get("server_running") and check.get("local_health") else "Waiting"
-            tradingview_state = "Connected" if check.get("enabled_symbols") and cache.get("last_received") else "Waiting"
             await admin.notify_admins(
                 application,
-                "\U0001f510 SHIVAY AI ADMIN\n\n"
-                "\U0001f7e2 SHIVAY AI ACTIVE\n\n"
-                "Telegram: Connected\n"
-                "Scanner: Active\n"
-                "Scheduler: Active\n"
-                f"Webhook: {webhook_state}\n"
-                f"TradingView: {tradingview_state}\n"
-                "Mode: Signals Only",
+                "🔱 SHIVAY AI PRO\n"
+                "✅ BOT ACTIVE\n"
+                "📡 DATA ENGINE: ACTIVE\n"
+                "📊 SCANNER: ACTIVE\n"
+                "⏱ SCHEDULER: ACTIVE\n"
+                "🎯 MODE: SIGNALS ONLY",
             )
         except Exception:
             LOGGER.warning("Startup admin notification was not delivered")

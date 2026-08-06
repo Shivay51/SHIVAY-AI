@@ -7,7 +7,8 @@ Futures or MCX contracts.
 """
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from datetime import datetime, timezone
+from typing import Any, Mapping, Protocol, runtime_checkable
 
 from data import SYMBOLS
 from data_quality import assess_market_data
@@ -36,7 +37,10 @@ class VerifiedMarketDataProvider:
 
     def get_quote(self, symbol: str) -> dict[str, Any] | None:
         try:
-            return get_provider_manager().get_verified_market_data(symbol, period="5d", interval="5m")
+            value = get_provider_manager().get_verified_market_data(symbol, period="5d", interval="5m")
+            result = dict(value)
+            result.update(normalize_market_snapshot(value, symbol))
+            return result
         except Exception:
             return None
 
@@ -97,6 +101,47 @@ class VerifiedMarketDataProvider:
 _FACADE = VerifiedMarketDataProvider()
 
 
+def normalize_market_snapshot(data: Mapping[str, Any], requested_symbol: str | None = None,
+                              retrieval_time: datetime | None = None) -> dict[str, Any]:
+    """Return the stable internal quote contract while preserving provider payloads."""
+    retrieved = retrieval_time or datetime.now(timezone.utc)
+    exchange_stamp = data.get("exchange_timestamp") or data.get("market_timestamp") or data.get("timestamp")
+    if isinstance(exchange_stamp, datetime) and exchange_stamp.tzinfo is None:
+        exchange_stamp = exchange_stamp.replace(tzinfo=timezone.utc)
+    price = data.get("ltp", data.get("last_price", data.get("price")))
+    is_stale = bool(data.get("is_stale"))
+    if not price or float(price) <= 0:
+        status = "UNAVAILABLE"
+    elif is_stale:
+        status = "STALE"
+    elif data.get("market_state") == "CLOSED" or data.get("freshness_status") == "CLOSED":
+        status = "CLOSED"
+    elif data.get("is_delayed"):
+        status = "DELAYED"
+    elif data.get("is_live"):
+        status = "LIVE"
+    else:
+        status = "UNAVAILABLE"
+    return {
+        "symbol": str(data.get("symbol") or requested_symbol or "").upper(),
+        "exchange": data.get("exchange"),
+        "contract": data.get("contract") or data.get("trading_symbol"),
+        "ltp": float(price) if price not in (None, "") else None,
+        "open": data.get("open_value", data.get("open")),
+        "high": data.get("day_high", data.get("high")),
+        "low": data.get("day_low", data.get("low")),
+        "close": data.get("close_value", data.get("previous_close", price)),
+        "volume": data.get("latest_volume", data.get("volume")),
+        "oi": data.get("open_interest"),
+        "bid": data.get("bid"),
+        "ask": data.get("ask"),
+        "exchange_timestamp": exchange_stamp,
+        "retrieval_timestamp": data.get("retrieved_at") or data.get("received_at") or retrieved,
+        "status": status,
+        "provider_internal": data.get("provider") or data.get("source"),
+    }
+
+
 def get_quote(symbol: str) -> dict[str, Any] | None: return _FACADE.get_quote(symbol)
 def get_ohlc(symbol: str) -> dict[str, Any] | None: return _FACADE.get_ohlc(symbol)
 def get_historical_candles(symbol: str, interval: str = "5m", period: str = "5d") -> list[dict[str, Any]]: return _FACADE.get_historical_candles(symbol, interval, period)
@@ -131,5 +176,5 @@ __all__ = [
     "get_historical_candles", "search_instrument", "get_instrument_master",
     "health_check", "freshness_status", "get_market_data", "get_live_price",
     "get_emergency_market_context", "refresh_market", "get_batch_market_data",
-    "force_refresh", "cache_size", "cache_age", "provider_status",
+    "force_refresh", "cache_size", "cache_age", "provider_status", "normalize_market_snapshot",
 ]
