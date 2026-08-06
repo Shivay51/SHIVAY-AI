@@ -11,7 +11,7 @@ import re
 import time as monotonic_time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from telegram import Update
@@ -184,6 +184,27 @@ def _bot_enabled(context: ContextTypes.DEFAULT_TYPE) -> bool:
     return bool(context.application.bot_data.get("shivay_enabled", True))
 
 
+def build_data_status_text(data: Mapping[str, Any] | None = None) -> str:
+    value = dict(data or {})
+    provider = str(value.get("provider_status") or value.get("provider") or "UNKNOWN").upper()
+    tradingview = value.get("tradingview") if isinstance(value.get("tradingview"), Mapping) else {}
+    tradingview_state = str(tradingview.get("state") or tradingview.get("status") or value.get("tradingview_status") or "UNKNOWN").upper()
+    market_state = str(value.get("market_state") or value.get("market_status") or "UNKNOWN").upper()
+    freshness = str(value.get("data_freshness") or value.get("freshness") or "UNKNOWN").upper()
+    instruments = value.get("instruments") if isinstance(value.get("instruments"), Mapping) else {}
+    lines = ["\U0001f4e1 SHIVAY AI \u2014 DATA STATUS", ""]
+    for key, label in (("NIFTY FUT", "NIFTY FUT"), ("BANKNIFTY FUT", "BANKNIFTY FUT"), ("MCX GOLD", "GOLD"), ("MCX SILVER", "SILVER")):
+        state = instruments.get(key)
+        if isinstance(state, Mapping):
+            state = state.get("status")
+        lines.append(f"{label}: {str(state or 'NO_DATA').upper().replace(' ', '_')}")
+    readiness = "READY" if provider not in {"UNKNOWN", "NO VERIFIED DATA", "NO_VERIFIED_DATA"} else "WAITING"
+    lines.extend(["", f"Readiness: {readiness}", "Mode: SIGNALS ONLY"])
+    if not instruments:
+        lines.extend([f"TradingView: {tradingview_state}", f"Market: {market_state}", f"Freshness: {freshness}"])
+    return "\n".join(lines)
+
+
 def _number(value: Any) -> float:
     try:
         return float(str(value).replace("%", "").strip())
@@ -295,6 +316,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "/trades — Active trades\n/open — Open trades\n/closed — Closed-trade summary\n"
             "/report — Market report\n/performance — Performance report\n"
             "/gold — Gold analysis\n/silver — Silver analysis\n"
+            "/datastatus — Market-data readiness\n"
             "/ping — Service health\n/version — Version\n/id — Your Telegram ID\n\n"
             "Administrator: /adduser /removeuser /listusers /startbot /stopbot /restart\n"
             "Details: /marketdetails /predictiondetails /golddetails /silverdetails /provider /systemhealth",
@@ -311,12 +333,20 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "regime": get_market_regime(),
             "tradeable": is_brain_market_tradeable(),
         })
+        from live_data_status import get_live_data_status
+        feeds = await _run(get_live_data_status)
+        mcx_states = {feeds["MCX GOLD"]["status"], feeds["MCX SILVER"]["status"]}
+        mcx_state = "LIVE" if mcx_states <= {"LIVE", "LIVE QUOTE"} else "PARTIAL" if "NO DATA" not in mcx_states else "NO DATA"
+        comex_states = {feeds["COMEX GOLD"]["status"], feeds["COMEX SILVER"]["status"]}
+        comex_state = "LIVE" if comex_states == {"LIVE"} else "DELAYED/CLOSED" if "NO DATA" not in comex_states else "NO DATA"
         await _reply(
             update,
             "🟢 SHIVAY AI STATUS\n\n"
             f"Bot: {'ACTIVE' if _bot_enabled(context) else 'PAUSED'}\n"
             f"Market: {data['direction']} ({data['regime']})\n"
-            f"Action: {'LOOK FOR CONFIRMED SETUPS' if data['tradeable'] else 'WAIT'}",
+            f"Action: {'LOOK FOR CONFIRMED SETUPS' if data['tradeable'] else 'WAIT'}\n\n"
+            f"NSE F&O: {feeds['NSE F&O']['status']}\nMCX: {mcx_state}\n"
+            f"GIFT NIFTY: {feeds['GIFT NIFTY']['status']}\nCOMEX: {comex_state}",
         )
     await _safe_command(update, "status", action)
 
@@ -407,7 +437,10 @@ async def market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         import morning_prediction
         from telegram_service import format_index_outlook_report
         data = await _run(morning_prediction.generate_morning_prediction)
-        await _reply(update, format_index_outlook_report(data, night=False).replace("🌅 MORNING MARKET OUTLOOK", "🌐 MARKET STATUS"))
+        text = format_index_outlook_report(data, night=False).replace("🌅 MORNING MARKET OUTLOOK", "🌐 MARKET STATUS")
+        if not text.strip():
+            text = "🌐 MARKET STATUS\n\nWaiting for enough market history to build a focused outlook."
+        await _reply(update, text)
     await _safe_command(update, "market", action)
 
 
@@ -426,7 +459,10 @@ async def prediction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if not await _require_authorized(update): return
         import morning_prediction
         data = await _run(morning_prediction.generate_morning_prediction)
-        await _reply(update, morning_prediction.format_morning_report(data))
+        text = morning_prediction.format_morning_report(data)
+        if not text.strip():
+            text = "☀️ MORNING OUTLOOK\n\nWaiting for enough market history to build a prediction."
+        await _reply(update, text)
     await _safe_command(update, "prediction", action)
 
 
@@ -547,6 +583,8 @@ async def _commodity(update: Update, metal: str) -> None:
         text = formatter(result) if callable(formatter) else str(result)
     else:
         text = str(result or "No analysis available.")
+    if not str(text).strip():
+        text = f"{metal.upper()} analysis is currently warming up."
     await _reply(update, f"{metal.upper()} ANALYSIS\n\n{text}")
 
 
@@ -556,6 +594,37 @@ async def gold(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def silver(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _safe_command(update, "silver", lambda: _commodity(update, "silver"))
+
+
+async def datastatus(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def action() -> None:
+        if not await _require_authorized(update):
+            return
+        try:
+            from market_data_provider import freshness_status, health_check
+            provider = await _run(health_check)
+            instruments = {
+                symbol: await _run(freshness_status, symbol)
+                for symbol in ("NIFTY FUT", "BANKNIFTY FUT", "MCX GOLD", "MCX SILVER")
+            }
+        except Exception:
+            provider, instruments = {}, {}
+        try:
+            from tradingview_webhook import status as tradingview_status
+            tradingview = await _run(tradingview_status)
+        except Exception:
+            tradingview = {}
+        cache = tradingview.get("cache", {}) if isinstance(tradingview, dict) else {}
+        payload = {
+            "provider_status": str(provider.get("mode") or provider.get("active_provider") or "NO VERIFIED DATA").upper(),
+            "market_state": "READY" if provider.get("active_provider") else "WAITING",
+            "tradingview": {"state": "CONNECTED" if cache.get("streams", 0) else "WAITING"},
+            "data_freshness": "LIVE" if cache.get("streams", 0) else "WARMING UP",
+            "instruments": instruments,
+            "show_provider": _is_admin(update),
+        }
+        await _reply(update, build_data_status_text(payload))
+    await _safe_command(update, "datastatus", action)
 
 
 async def _details(update: Update, kind: str) -> None:

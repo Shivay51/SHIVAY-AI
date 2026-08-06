@@ -1,135 +1,437 @@
 //@version=6
-indicator("SHIVAY AI TradingView Alert Bridge", overlay = true, max_bars_back = 600)
+indicator(
+     "SHIVAY AI TradingView Alert Bridge",
+     overlay = true,
+     max_bars_back = 500
+)
 
-// User configuration. The webhook token is supplied locally and is never hard-coded.
-string instrumentName = input.string("Configured Instrument", "Instrument display name", confirm = true)
-string instrumentCategory = input.string("NSE_FO", "Instrument category", options = ["NSE_FO", "MCX", "GIFT", "GLOBAL_CONTEXT"], confirm = true)
-string contractText = input.string("Configured Contract", "Contract text", confirm = true)
-string sharedSecret = input.string("", "Shared webhook token", confirm = true)
-string scriptVersion = input.string("2026.08.2", "Script version")
-int chandelierAtrPeriod = input.int(22, "Chandelier ATR period", minval = 2, maxval = 200)
-float chandelierMultiplier = input.float(3.0, "Chandelier multiplier", minval = 0.1, maxval = 20, step = 0.1)
-int rsiPeriod = input.int(14, "RSI period", minval = 2, maxval = 100)
-int adxPeriod = input.int(14, "ADX period", minval = 2, maxval = 100)
-int emaFastPeriod = input.int(20, "Fast EMA period", minval = 2, maxval = 300)
-int emaMediumPeriod = input.int(50, "Medium EMA period", minval = 3, maxval = 400)
-int emaSlowPeriod = input.int(200, "Slow EMA period", minval = 10, maxval = 600)
-int relativeVolumePeriod = input.int(20, "Relative-volume period", minval = 2, maxval = 200)
-int swingLookback = input.int(20, "Swing lookback", minval = 3, maxval = 200)
-float minimumRelativeVolume = input.float(0.85, "Minimum relative volume", minval = 0, maxval = 10, step = 0.05)
-float minimumAdx = input.float(18, "Minimum ADX", minval = 0, maxval = 100, step = 0.5)
-float maximumBuyRsi = input.float(76, "Maximum RSI for BUY", minval = 50, maxval = 95, step = 0.5)
-float minimumSellRsi = input.float(24, "Minimum RSI for SELL", minval = 5, maxval = 50, step = 0.5)
-int signalCooldownBars = input.int(2, "Signal cooldown bars", minval = 1, maxval = 100)
-float entryBufferAtr = input.float(0.05, "Entry buffer (ATR)", minval = 0, maxval = 1, step = 0.01)
-bool enablePreliminarySignals = input.bool(true, "Enable preliminary setup events")
-bool enableBarCloseHeartbeat = input.bool(false, "Enable bar-close timeframe updates")
-bool sendOneSafeTestEvent = input.bool(false, "Send one safe test event")
-bool showSetupMarkers = input.bool(true, "Show setup markers")
+// =====================================================
+// HELPER FUNCTION
+// Must be declared without a return type before its name.
+// =====================================================
+toJsonNumber(float value) =>
+    na(value) ? "null" : str.tostring(value, format.mintick)
 
-// Core indicators, calculated only from chart bars.
-float ema20 = ta.ema(close, emaFastPeriod)
-float ema50 = ta.ema(close, emaMediumPeriod)
-float ema200 = ta.ema(close, emaSlowPeriod)
+// =====================================================
+// USER SETTINGS
+// =====================================================
+string sharedSecret = input.string(
+     "",
+     "Webhook shared secret",
+     confirm = true
+)
+
+string instrumentName = input.string(
+     "USER_SELECTED_CONTRACT",
+     "Configured instrument name",
+     confirm = true
+)
+
+string instrumentCategory = input.string(
+     "USER_SELECTED_CATEGORY",
+     "Instrument category",
+     confirm = true
+)
+
+string contractText = input.string(
+     "USER_VERIFIED_CONTRACT",
+     "Contract text",
+     confirm = true
+)
+
+int atrPeriod = input.int(
+     7,
+     "Chandelier ATR period",
+     minval = 2
+)
+
+float atrMultiplier = input.float(
+     2.0,
+     "Chandelier ATR multiplier",
+     minval = 0.1,
+     step = 0.1
+)
+
+// =====================================================
+// INDICATORS
+// =====================================================
+float ema20 = ta.ema(close, 20)
+float ema50 = ta.ema(close, 50)
+float ema200 = ta.ema(close, 200)
+
 float currentVwap = ta.vwap(hlc3)
-float currentRsi = ta.rsi(close, rsiPeriod)
-[plusDi, minusDi, currentAdx] = ta.dmi(adxPeriod, adxPeriod)
+float currentRsi = ta.rsi(close, 14)
+
+[plusDI, minusDI, currentAdx] = ta.dmi(14, 14)
 [macdValue, macdSignal, macdHistogram] = ta.macd(close, 12, 26, 9)
-float currentAtr = ta.atr(chandelierAtrPeriod)
-float averageVolume = ta.sma(volume, relativeVolumePeriod)
-float relativeVolume = averageVolume > 0 ? volume / averageVolume : na
-[supertrendValue, supertrendCode] = ta.supertrend(3.0, 10)
-string supertrendDirection = supertrendCode < 0 ? "BULLISH" : "BEARISH"
 
-// Two compact daily requests avoid look-ahead and obtain session context.
-[dayOpen, dayHigh, dayLow] = request.security(syminfo.tickerid, "D", [open, high, low], lookahead = barmerge.lookahead_off)
-[previousDayHigh, previousDayLow, previousClose] = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], lookahead = barmerge.lookahead_off)
+float currentAtr = ta.atr(atrPeriod)
+float averageVolume = ta.sma(volume, 20)
 
-// Chandelier stops trail in one direction while their side remains active.
-float rawLongStop = ta.highest(high, chandelierAtrPeriod) - currentAtr * chandelierMultiplier
-float rawShortStop = ta.lowest(low, chandelierAtrPeriod) + currentAtr * chandelierMultiplier
-var float chandelierLongStop = na
-var float chandelierShortStop = na
-float previousLongStop = nz(chandelierLongStop[1], rawLongStop)
-float previousShortStop = nz(chandelierShortStop[1], rawShortStop)
-chandelierLongStop := close[1] > previousLongStop ? math.max(rawLongStop, previousLongStop) : rawLongStop
-chandelierShortStop := close[1] < previousShortStop ? math.min(rawShortStop, previousShortStop) : rawShortStop
+float relativeVolume =
+     not na(averageVolume) and averageVolume > 0
+     ? volume / averageVolume
+     : na
+
+// =====================================================
+// CHANDELIER EXIT
+// =====================================================
+float chandelierLong =
+     ta.highest(high, atrPeriod) -
+     currentAtr * atrMultiplier
+
+float chandelierShort =
+     ta.lowest(low, atrPeriod) +
+     currentAtr * atrMultiplier
+
 var int chandelierState = 0
-int previousChandelierState = nz(chandelierState[1], 0)
-chandelierState := close > previousShortStop ? 1 : close < previousLongStop ? -1 : previousChandelierState
-string chandelierDirection = chandelierState == 1 ? "BULLISH" : chandelierState == -1 ? "BEARISH" : "SIDEWAYS"
-bool chandelierDirectionChanged = chandelierState != previousChandelierState
 
-// Structure uses prior completed bars, never future bars.
-float swingHigh = ta.highest(high[1], swingLookback)
-float swingLow = ta.lowest(low[1], swingLookback)
-bool higherHigh = swingHigh > swingHigh[1]
-bool higherLow = swingLow > swingLow[1]
-bool lowerHigh = swingHigh < swingHigh[1]
-bool lowerLow = swingLow < swingLow[1]
-float entryBuffer = currentAtr * entryBufferAtr
-bool bullishBreakout = close > swingHigh + entryBuffer
-bool bearishBreakdown = close < swingLow - entryBuffer
-bool bullishRetest = low <= swingHigh + entryBuffer and close > swingHigh and close > open
-bool bearishRetest = high >= swingLow - entryBuffer and close < swingLow and close < open
-bool bullishPullback = low <= ema20 + entryBuffer and close > ema20 and close > open and ema20 > ema50
-bool bearishPullback = high >= ema20 - entryBuffer and close < ema20 and close < open and ema20 < ema50
+chandelierState :=
+     close > nz(chandelierShort[1], chandelierShort)
+     ? 1
+     : close < nz(chandelierLong[1], chandelierLong)
+     ? -1
+     : nz(chandelierState[1], 0)
 
-bool bullishEmaStructure = ema20 > ema50 and ema50 > ema200
-bool bearishEmaStructure = ema20 < ema50 and ema50 < ema200
-string trendState = bullishEmaStructure and (higherHigh or higherLow) ? "BULLISH" : bearishEmaStructure and (lowerHigh or lowerLow) ? "BEARISH" : "SIDEWAYS"
-string momentumState = macdHistogram > 0 and plusDi > minusDi ? "BULLISH" : macdHistogram < 0 and minusDi > plusDi ? "BEARISH" : "NEUTRAL"
-string structureState = higherHigh and higherLow ? "BULLISH" : lowerHigh and lowerLow ? "BEARISH" : "MIXED"
-bool volumeConfirmed = relativeVolume >= minimumRelativeVolume
-bool supportedTimeframe = timeframe.period == "5" or timeframe.period == "15" or timeframe.period == "30" or timeframe.period == "60"
-bool completedDecisionTimeframe = timeframe.period == "15" or timeframe.period == "30" or timeframe.period == "60"
-bool valuesReady = not na(ema200) and not na(currentVwap) and not na(currentRsi) and not na(currentAdx) and not na(plusDi) and not na(minusDi) and not na(currentAtr) and not na(relativeVolume) and not na(swingHigh) and not na(swingLow) and not na(previousClose) and not na(dayOpen)
+string chandelierDirection =
+     chandelierState == 1
+     ? "BULLISH"
+     : chandelierState == -1
+     ? "BEARISH"
+     : "SIDEWAYS"
 
-bool preliminaryBuyRaw = bullishEmaStructure and trendState == "BULLISH" and chandelierDirection == "BULLISH" and supertrendDirection == "BULLISH" and momentumState == "BULLISH" and currentRsi >= 48 and currentRsi <= maximumBuyRsi and currentAdx >= minimumAdx and volumeConfirmed and (bullishBreakout or bullishRetest or bullishPullback)
-bool preliminarySellRaw = bearishEmaStructure and trendState == "BEARISH" and chandelierDirection == "BEARISH" and supertrendDirection == "BEARISH" and momentumState == "BEARISH" and currentRsi >= minimumSellRsi and currentRsi <= 52 and currentAdx >= minimumAdx and volumeConfirmed and (bearishBreakdown or bearishRetest or bearishPullback)
-bool conflict = preliminaryBuyRaw and preliminarySellRaw
-bool preliminaryBuy = enablePreliminarySignals and preliminaryBuyRaw and not conflict and completedDecisionTimeframe and barstate.isconfirmed and valuesReady
-bool preliminarySell = enablePreliminarySignals and preliminarySellRaw and not conflict and completedDecisionTimeframe and barstate.isconfirmed and valuesReady
-bool setupValid = (preliminaryBuy != preliminarySell) and not conflict
+// =====================================================
+// STRUCTURE
+// =====================================================
+float swingHigh = ta.highest(high[1], 20)
+float swingLow = ta.lowest(low[1], 20)
 
-// Strings are stripped of JSON control characters so user inputs cannot break JSON.
-cleanJsonText(string value) => str.replace_all(str.replace_all(str.replace_all(value, "\"", ""), "\\", ""), "\n", " ")
-jsonNumber(float value) => na(value) ? "null" : str.tostring(value, format.mintick)
-jsonBoolean(bool value) => value ? "true" : "false"
-string safeInstrument = cleanJsonText(instrumentName)
-string safeCategory = cleanJsonText(instrumentCategory)
-string safeContract = cleanJsonText(contractText)
+float previousClose = request.security(
+     syminfo.tickerid,
+     "D",
+     close[1],
+     lookahead = barmerge.lookahead_off
+)
 
-var int lastAlertBar = na
-var int lastSetupBar = na
-var bool testEventSent = false
-bool setupCooldownReady = na(lastSetupBar) or bar_index - lastSetupBar >= signalCooldownBars
-string eventType = sendOneSafeTestEvent and not testEventSent ? "test" : chandelierDirectionChanged ? "chandelier_direction_change" : preliminaryBuy and setupCooldownReady ? "preliminary_buy" : preliminarySell and setupCooldownReady ? "preliminary_sell" : enableBarCloseHeartbeat ? "timeframe_update" : ""
-bool tokenReady = str.length(sharedSecret) >= 24 and str.length(sharedSecret) <= 128
-bool shouldAlert = barstate.isrealtime and barstate.isconfirmed and supportedTimeframe and valuesReady and tokenReady and str.length(eventType) > 0 and (na(lastAlertBar) or bar_index != lastAlertBar)
+float currentDayOpen = request.security(
+     syminfo.tickerid,
+     "D",
+     open,
+     lookahead = barmerge.lookahead_off
+)
 
-if shouldAlert
-    string eventId = syminfo.tickerid + "-" + timeframe.period + "-" + str.tostring(time) + "-" + eventType
-    string payload = "{" +
-      "\"secret\":\"" + sharedSecret + "\",\"event_id\":\"" + eventId + "\",\"event_type\":\"" + eventType + "\",\"script_version\":\"" + cleanJsonText(scriptVersion) + "\"," +
-      "\"symbol\":\"" + syminfo.tickerid + "\",\"ticker_id\":\"" + syminfo.tickerid + "\",\"exchange\":\"" + syminfo.prefix + "\",\"instrument\":\"" + safeInstrument + "\",\"category\":\"" + safeCategory + "\",\"contract_text\":\"" + safeContract + "\",\"timeframe\":" + timeframe.period + "," +
-      "\"open\":" + jsonNumber(open) + ",\"high\":" + jsonNumber(high) + ",\"low\":" + jsonNumber(low) + ",\"close\":" + jsonNumber(close) + ",\"volume\":" + jsonNumber(volume) + ",\"previous_close\":" + jsonNumber(previousClose) + "," +
-      "\"day_open\":" + jsonNumber(dayOpen) + ",\"day_high\":" + jsonNumber(dayHigh) + ",\"day_low\":" + jsonNumber(dayLow) + ",\"previous_day_high\":" + jsonNumber(previousDayHigh) + ",\"previous_day_low\":" + jsonNumber(previousDayLow) + "," +
-      "\"ema20\":" + jsonNumber(ema20) + ",\"ema50\":" + jsonNumber(ema50) + ",\"ema200\":" + jsonNumber(ema200) + ",\"vwap\":" + jsonNumber(currentVwap) + ",\"rsi\":" + jsonNumber(currentRsi) + ",\"adx\":" + jsonNumber(currentAdx) + ",\"plus_di\":" + jsonNumber(plusDi) + ",\"minus_di\":" + jsonNumber(minusDi) + "," +
-      "\"macd\":" + jsonNumber(macdValue) + ",\"macd_signal\":" + jsonNumber(macdSignal) + ",\"macd_histogram\":" + jsonNumber(macdHistogram) + ",\"atr\":" + jsonNumber(currentAtr) + ",\"relative_volume\":" + jsonNumber(relativeVolume) + ",\"supertrend_direction\":\"" + supertrendDirection + "\"," +
-      "\"chandelier_long_stop\":" + jsonNumber(chandelierLongStop) + ",\"chandelier_short_stop\":" + jsonNumber(chandelierShortStop) + ",\"chandelier_direction\":\"" + chandelierDirection + "\",\"chandelier_direction_changed\":" + jsonBoolean(chandelierDirectionChanged) + "," +
-      "\"swing_high\":" + jsonNumber(swingHigh) + ",\"swing_low\":" + jsonNumber(swingLow) + ",\"breakout_level\":" + jsonNumber(swingHigh) + ",\"breakdown_level\":" + jsonNumber(swingLow) + ",\"signal_candle_high\":" + jsonNumber(high) + ",\"signal_candle_low\":" + jsonNumber(low) + "," +
-      "\"higher_high\":" + jsonBoolean(higherHigh) + ",\"higher_low\":" + jsonBoolean(higherLow) + ",\"lower_high\":" + jsonBoolean(lowerHigh) + ",\"lower_low\":" + jsonBoolean(lowerLow) + ",\"bullish_breakout\":" + jsonBoolean(bullishBreakout) + ",\"bearish_breakdown\":" + jsonBoolean(bearishBreakdown) + "," +
-      "\"bullish_retest\":" + jsonBoolean(bullishRetest) + ",\"bearish_retest\":" + jsonBoolean(bearishRetest) + ",\"bullish_pullback\":" + jsonBoolean(bullishPullback) + ",\"bearish_pullback\":" + jsonBoolean(bearishPullback) + "," +
-      "\"trend_state\":\"" + trendState + "\",\"momentum_state\":\"" + momentumState + "\",\"structure_state\":\"" + structureState + "\",\"volume_confirmed\":" + jsonBoolean(volumeConfirmed) + ",\"preliminary_buy\":" + jsonBoolean(preliminaryBuy) + ",\"preliminary_sell\":" + jsonBoolean(preliminarySell) + ",\"setup_valid\":" + jsonBoolean(setupValid) + "," +
-      "\"bar_timestamp\":" + str.tostring(time) + ",\"generated_at\":" + str.tostring(timenow) + ",\"bar_confirmed\":true}"
-    alert(payload, alert.freq_once_per_bar_close)
-    lastAlertBar := bar_index
-    if eventType == "test"
-        testEventSent := true
-    if preliminaryBuy or preliminarySell
-        lastSetupBar := bar_index
+float currentDayHigh = request.security(
+     syminfo.tickerid,
+     "D",
+     high,
+     lookahead = barmerge.lookahead_off
+)
 
-plot(chandelierState == 1 ? chandelierLongStop : chandelierState == -1 ? chandelierShortStop : na, "Active Chandelier Stop", color = chandelierState == 1 ? color.green : color.red, style = plot.style_linebr, linewidth = 2)
-plotshape(showSetupMarkers and preliminaryBuy, title = "BUY setup", style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.tiny, text = "BUY")
-plotshape(showSetupMarkers and preliminarySell, title = "SELL setup", style = shape.triangledown, location = location.abovebar, color = color.red, size = size.tiny, text = "SELL")
+float currentDayLow = request.security(
+     syminfo.tickerid,
+     "D",
+     low,
+     lookahead = barmerge.lookahead_off
+)
+
+float previousDayHigh = request.security(
+     syminfo.tickerid,
+     "D",
+     high[1],
+     lookahead = barmerge.lookahead_off
+)
+
+float previousDayLow = request.security(
+     syminfo.tickerid,
+     "D",
+     low[1],
+     lookahead = barmerge.lookahead_off
+)
+
+// =====================================================
+// SUPERTREND
+// =====================================================
+[supertrendValue, supertrendCode] = ta.supertrend(3.0, 10)
+
+string supertrendDirection =
+     supertrendCode < 0
+     ? "BULLISH"
+     : "BEARISH"
+
+// =====================================================
+// MARKET STRUCTURE FLAGS
+// =====================================================
+bool higherHigh =
+     not na(swingHigh) and
+     not na(swingHigh[1]) and
+     swingHigh > swingHigh[1]
+
+bool higherLow =
+     not na(swingLow) and
+     not na(swingLow[1]) and
+     swingLow > swingLow[1]
+
+bool lowerHigh =
+     not na(swingHigh) and
+     not na(swingHigh[1]) and
+     swingHigh < swingHigh[1]
+
+bool lowerLow =
+     not na(swingLow) and
+     not na(swingLow[1]) and
+     swingLow < swingLow[1]
+
+bool breakoutStatus =
+     not na(swingHigh) and
+     close > swingHigh
+
+bool breakdownStatus =
+     not na(swingLow) and
+     close < swingLow
+
+bool bullishRetest =
+     not na(swingHigh) and
+     low <= swingHigh and
+     close > swingHigh
+
+bool bearishRetest =
+     not na(swingLow) and
+     high >= swingLow and
+     close < swingLow
+
+bool bullishPullback =
+     not na(currentAtr) and
+     math.abs(close - ema20) <= currentAtr and
+     close > ema20 and
+     ema20 > ema50
+
+bool bearishPullback =
+     not na(currentAtr) and
+     math.abs(close - ema20) <= currentAtr and
+     close < ema20 and
+     ema20 < ema50
+
+bool retestStatus =
+     bullishRetest or bearishRetest
+
+bool pullbackStatus =
+     bullishPullback or bearishPullback
+
+bool chandelierChanged =
+     chandelierState != nz(chandelierState[1], 0)
+
+// =====================================================
+// TREND AND MOMENTUM
+// =====================================================
+string trendState =
+     ema20 > ema50 and ema50 > ema200
+     ? "BULLISH"
+     : ema20 < ema50 and ema50 < ema200
+     ? "BEARISH"
+     : "SIDEWAYS"
+
+string momentumState =
+     macdHistogram > 0 and currentRsi > 50
+     ? "BULLISH"
+     : macdHistogram < 0 and currentRsi < 50
+     ? "BEARISH"
+     : "NEUTRAL"
+
+bool volumeConfirmed =
+     not na(relativeVolume) and
+     relativeVolume >= 1.0
+
+// =====================================================
+// PRELIMINARY SIGNALS
+// =====================================================
+bool preliminaryBuy =
+     trendState == "BULLISH" and
+     chandelierDirection == "BULLISH" and
+     supertrendDirection == "BULLISH" and
+     momentumState == "BULLISH" and
+     (
+         breakoutStatus or
+         bullishRetest or
+         bullishPullback
+     )
+
+bool preliminarySell =
+     trendState == "BEARISH" and
+     chandelierDirection == "BEARISH" and
+     supertrendDirection == "BEARISH" and
+     momentumState == "BEARISH" and
+     (
+         breakdownStatus or
+         bearishRetest or
+         bearishPullback
+     )
+
+bool setupValid =
+     (preliminaryBuy or preliminarySell) and
+     currentAdx >= 18 and
+     currentRsi > 22 and
+     currentRsi < 78
+
+// =====================================================
+// ALERT VALIDATION
+// =====================================================
+bool supportedTimeframe =
+     timeframe.period == "1" or
+     timeframe.period == "5" or
+     timeframe.period == "15" or
+     timeframe.period == "30" or
+     timeframe.period == "60"
+
+bool valuesReady =
+     not na(ema200) and
+     not na(currentVwap) and
+     not na(currentAdx) and
+     not na(currentAtr) and
+     not na(relativeVolume) and
+     not na(swingHigh) and
+     not na(swingLow) and
+     not na(previousClose)
+
+bool secretReady =
+     str.length(sharedSecret) >= 24
+
+bool alertSignal =
+     barstate.isrealtime and
+     barstate.isconfirmed and
+     supportedTimeframe and
+     valuesReady and
+     secretReady
+
+// =====================================================
+// WEBHOOK JSON ALERT
+// =====================================================
+if alertSignal
+    string eventId =
+         syminfo.tickerid +
+         "-" +
+         timeframe.period +
+         "-" +
+         str.tostring(time)
+
+    string message =
+         "{" +
+         "\"secret\":\"" + sharedSecret + "\"," +
+         "\"source\":\"TRADINGVIEW_PINE_BRIDGE\"," +
+         "\"event_id\":\"" + eventId + "\"," +
+         "\"event_type\":\"timeframe_update\"," +
+         "\"script_version\":\"2026.08.2\"," +
+
+         "\"symbol\":\"" + syminfo.tickerid + "\"," +
+         "\"ticker_id\":\"" + syminfo.tickerid + "\"," +
+         "\"exchange\":\"" + syminfo.prefix + "\"," +
+
+         "\"instrument\":\"" + instrumentName + "\"," +
+         "\"category\":\"" + instrumentCategory + "\"," +
+         "\"contract_text\":\"" + contractText + "\"," +
+
+         "\"timeframe\":\"" + timeframe.period + "\"," +
+
+         "\"open\":" + toJsonNumber(open) + "," +
+         "\"high\":" + toJsonNumber(high) + "," +
+         "\"low\":" + toJsonNumber(low) + "," +
+         "\"close\":" + toJsonNumber(close) + "," +
+         "\"volume\":" + toJsonNumber(volume) + "," +
+
+         "\"previous_close\":" + toJsonNumber(previousClose) + "," +
+         "\"day_open\":" + toJsonNumber(currentDayOpen) + "," +
+         "\"day_high\":" + toJsonNumber(currentDayHigh) + "," +
+         "\"day_low\":" + toJsonNumber(currentDayLow) + "," +
+         "\"previous_day_high\":" + toJsonNumber(previousDayHigh) + "," +
+         "\"previous_day_low\":" + toJsonNumber(previousDayLow) + "," +
+
+         "\"ema20\":" + toJsonNumber(ema20) + "," +
+         "\"ema50\":" + toJsonNumber(ema50) + "," +
+         "\"ema200\":" + toJsonNumber(ema200) + "," +
+         "\"vwap\":" + toJsonNumber(currentVwap) + "," +
+
+         "\"rsi\":" + toJsonNumber(currentRsi) + "," +
+         "\"adx\":" + toJsonNumber(currentAdx) + "," +
+         "\"plus_di\":" + toJsonNumber(plusDI) + "," +
+         "\"minus_di\":" + toJsonNumber(minusDI) + "," +
+
+         "\"macd\":" + toJsonNumber(macdValue) + "," +
+         "\"macd_signal\":" + toJsonNumber(macdSignal) + "," +
+         "\"macd_histogram\":" + toJsonNumber(macdHistogram) + "," +
+
+         "\"atr\":" + toJsonNumber(currentAtr) + "," +
+         "\"relative_volume\":" + toJsonNumber(relativeVolume) + "," +
+
+         "\"chandelier_long_stop\":" + toJsonNumber(chandelierLong) + "," +
+         "\"chandelier_short_stop\":" + toJsonNumber(chandelierShort) + "," +
+         "\"chandelier_direction\":\"" + chandelierDirection + "\"," +
+
+         "\"supertrend_value\":" + toJsonNumber(supertrendValue) + "," +
+         "\"supertrend_direction\":\"" + supertrendDirection + "\"," +
+
+         "\"trend_state\":\"" + trendState + "\"," +
+         "\"momentum_state\":\"" + momentumState + "\"," +
+
+         "\"swing_high\":" + toJsonNumber(swingHigh) + "," +
+         "\"swing_low\":" + toJsonNumber(swingLow) + "," +
+         "\"breakout_level\":" + toJsonNumber(swingHigh) + "," +
+         "\"breakdown_level\":" + toJsonNumber(swingLow) + "," +
+
+         "\"signal_candle_high\":" + toJsonNumber(high) + "," +
+         "\"signal_candle_low\":" + toJsonNumber(low) + "," +
+
+         "\"higher_high\":" + str.tostring(higherHigh) + "," +
+         "\"higher_low\":" + str.tostring(higherLow) + "," +
+         "\"lower_high\":" + str.tostring(lowerHigh) + "," +
+         "\"lower_low\":" + str.tostring(lowerLow) + "," +
+
+         "\"breakout\":" + str.tostring(breakoutStatus) + "," +
+         "\"breakdown\":" + str.tostring(breakdownStatus) + "," +
+         "\"bullish_breakout\":" + str.tostring(breakoutStatus) + "," +
+         "\"bearish_breakdown\":" + str.tostring(breakdownStatus) + "," +
+
+         "\"bullish_retest\":" + str.tostring(bullishRetest) + "," +
+         "\"bearish_retest\":" + str.tostring(bearishRetest) + "," +
+         "\"retest\":" + str.tostring(retestStatus) + "," +
+
+         "\"bullish_pullback\":" + str.tostring(bullishPullback) + "," +
+         "\"bearish_pullback\":" + str.tostring(bearishPullback) + "," +
+         "\"pullback\":" + str.tostring(pullbackStatus) + "," +
+
+         "\"chandelier_direction_changed\":" +
+         str.tostring(chandelierChanged) + "," +
+
+         "\"preliminary_buy\":" +
+         str.tostring(preliminaryBuy) + "," +
+
+         "\"preliminary_sell\":" +
+         str.tostring(preliminarySell) + "," +
+
+         "\"volume_confirmed\":" +
+         str.tostring(volumeConfirmed) + "," +
+
+         "\"setup_valid\":" +
+         str.tostring(setupValid) + "," +
+
+         "\"bar_timestamp\":" + str.tostring(time) + "," +
+         "\"generated_at\":" + str.tostring(timenow) + "," +
+         "\"bar_confirmed\":true" +
+         "}"
+
+    alert(message, alert.freq_once_per_bar_close)
+
+// =====================================================
+// VISUAL CHANDELIER LINES
+// =====================================================
+plot(
+     chandelierState == 1 ? chandelierLong : na,
+     title = "Chandelier Long",
+     color = color.green,
+     style = plot.style_linebr
+)
+
+plot(
+     chandelierState == -1 ? chandelierShort : na,
+     title = "Chandelier Short",
+     color = color.red,
+     style = plot.style_linebr
+)

@@ -65,8 +65,10 @@ def validate_candles(candles: Sequence[Mapping[str, Any]], now: datetime | None 
 
 def validate_instrument_contract(data: Mapping[str, Any], requested_symbol: str | None = None, today: date | None = None) -> list[str]:
     errors=[];symbol=str(requested_symbol or data.get("symbol") or "").strip().upper();exchange=str(data.get("exchange") or "").upper();segment=str(data.get("segment") or "").upper();kind=str(data.get("instrument_type") or "").upper();today=today or datetime.now(ZoneInfo("Asia/Kolkata")).date()
-    wants_future=symbol.endswith(" FUT") or symbol in {"GOLD","SILVER","MCX GOLD","MCX SILVER"}
-    wants_mcx="GOLD" in symbol or "SILVER" in symbol
+    commodity_names={"GOLD","SILVER","CRUDEOIL","CRUDE OIL","NATURALGAS","NATURAL GAS","COPPER"}
+    normalized_symbol=symbol.removesuffix(" FUT").replace("MCX","").strip()
+    wants_future=symbol.endswith(" FUT") or normalized_symbol in commodity_names
+    wants_mcx=normalized_symbol in commodity_names or exchange=="MCX" or segment=="MCX_COMM"
     if wants_future and kind not in FUTURE_TYPES:errors.append("cash_futures_mismatch")
     if wants_mcx and (exchange!="MCX" or segment!="MCX_COMM" or kind!="FUTCOM"):errors.append("mcx_contract_mismatch")
     if wants_future and not wants_mcx and (exchange!="NSE" or segment!="NSE_FNO" or kind not in {"FUTIDX","FUTSTK"}):errors.append("nse_futures_contract_mismatch")
@@ -80,8 +82,8 @@ def validate_instrument_contract(data: Mapping[str, Any], requested_symbol: str 
         if not data.get("instrument_key"):errors.append("missing_instrument_key")
         if not data.get("lot_size"):errors.append("missing_lot_size")
         if not data.get("tick_size"):errors.append("missing_tick_size")
-        underlying=str(data.get("underlying") or "").upper().replace(" ","");expected=symbol.removesuffix(" FUT").replace("MCX","").replace(" ","")
-        aliases={"BANKNIFTY":{"BANKNIFTY","NIFTYBANK"},"NIFTY":{"NIFTY"},"GOLD":{"GOLD"},"SILVER":{"SILVER"}}
+        underlying=str(data.get("underlying") or "").upper().replace(" ","");expected=normalized_symbol.replace(" ","")
+        aliases={"BANKNIFTY":{"BANKNIFTY","NIFTYBANK"},"NIFTY":{"NIFTY"},"GOLD":{"GOLD"},"SILVER":{"SILVER"},"CRUDEOIL":{"CRUDEOIL"},"NATURALGAS":{"NATURALGAS"},"COPPER":{"COPPER"}}
         if underlying and underlying not in aliases.get(expected,{expected}):errors.append("wrong_underlying_contract")
     provider=str(data.get("provider") or "").lower()
     trading=str(data.get("trading_symbol") or "").upper()

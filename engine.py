@@ -31,6 +31,10 @@ def run_engine(market):
         side = str(score_data.get("signal_side", "NO TRADE"))
         if side not in ("BUY", "SELL"):
             return None
+        chandelier_entry = score_data.get("chandelier_entry_state")
+        if (not isinstance(chandelier_entry, dict) or not chandelier_entry.get("confirmed")
+                or chandelier_entry.get("status") != "CONFIRMED" or chandelier_entry.get("side") != side):
+            return None
         symbol = str(market.get("symbol", market.get("requested_symbol", market.get("trading_symbol", "UNKNOWN"))))
         context = assess_signal_context(market, symbol, side)
         if not context["valid"]:

@@ -32,7 +32,7 @@ def _environment_float(*names, default=0.0):
 PRIMARY_TIMEFRAME_MINUTES = 15
 CONFIRMATION_TIMEFRAMES_MINUTES = (30, 60)
 ENTRY_TIMING_TIMEFRAME_MINUTES = 5
-SCAN_INTERVAL = 900
+SCAN_INTERVAL = 300
 MAX_SETUP_AGE_CANDLES = 2
 ENTRY_VALIDITY_MINUTES = 18
 CHANDELIER_SIGNAL_TIMEFRAME = "15m"
@@ -142,8 +142,9 @@ def _environment_int(*names, default=0):
     return int(default)
 
 
-CHANDELIER_ATR_PERIOD = max(2, _environment_int("CHANDELIER_ATR_PERIOD", default=22))
-CHANDELIER_ATR_MULTIPLIER = max(0.1, _environment_float("CHANDELIER_ATR_MULTIPLIER", default=3.0))
+CHANDELIER_ATR_PERIOD = max(2, _environment_int("CHANDELIER_ATR_PERIOD", default=7))
+CHANDELIER_ATR_MULTIPLIER = max(0.1, _environment_float("CHANDELIER_ATR_MULTIPLIER", default=2.0))
+CHANDELIER_CONFIRMATION_SECONDS = max(45, _environment_int("CHANDELIER_CONFIRMATION_SECONDS", default=60))
 ENTRY_CONFIRMATION_CANDLES = max(1, _environment_int("ENTRY_CONFIRMATION_CANDLES", default=1))
 ENTRY_BREAK_BUFFER_ATR = max(0.0, _environment_float("ENTRY_BREAK_BUFFER_ATR", default=0.05))
 SIGNAL_MAX_AGE_CANDLES = max(1, _environment_int("SIGNAL_MAX_AGE_CANDLES", default=2))
@@ -176,7 +177,7 @@ PROVIDER_PRIORITY = tuple(
     item.strip().lower()
     for item in os.getenv(
         "PROVIDER_PRIORITY",
-        "tradingview_alert_bridge,truedata_primary,gdfl_primary,shoonya_primary,fyers_primary,dhan_primary,upstox_primary,angelone_primary,market_hub,yahoo_emergency",
+        "groww_primary,nse_temporary,mcx_temporary,upstox_primary,tradingview_alert_bridge,dhan_primary,shoonya_primary,truedata_primary,gdfl_primary,fyers_primary,angelone_primary,market_hub,yahoo_emergency",
     ).split(",")
     if item.strip()
 )

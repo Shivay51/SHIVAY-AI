@@ -73,6 +73,9 @@ EOD_TIME = _clock("EOD_REPORT", 15, 35)
 OVERNIGHT_TIME = _clock("OVERNIGHT_ANALYSIS", 16, 0)
 LATE_EVENING_TIME = _clock("LATE_EVENING_UPDATE", 19, 30)
 LATE_NIGHT_TIME = _clock("LATE_NIGHT_UPDATE", 23, 0)
+OUTLOOK_EVENING_TIME = _clock("NEXT_SESSION_EVENING", 22, 0)
+OUTLOOK_OVERNIGHT_TIME = _clock("NEXT_SESSION_OVERNIGHT", 1, 0)
+OUTLOOK_PREOPEN_TIME = _clock("NEXT_SESSION_PREOPEN", 8, 0)
 SCAN_SECONDS = max(60, int(_cfg("SCAN_INTERVAL", 300)))
 MONITOR_SECONDS = max(15, int(_cfg("TRADE_MONITOR_INTERVAL", 30)))
 CACHE_SECONDS = max(180, int(_cfg("CACHE_TIME", 300)))
@@ -99,11 +102,15 @@ def _mcx_open(now: datetime) -> bool:
 
 
 def _next_scan_boundary(now: datetime) -> datetime:
-    minutes = max(15, int(_cfg("PRIMARY_TIMEFRAME_MINUTES", 15)))
-    elapsed = now.minute % minutes
-    boundary = now.replace(second=10, microsecond=0) + timedelta(minutes=(minutes - elapsed) % minutes)
+    """Probe one minute after each 15m open, otherwise use a balanced 5m cadence."""
+    primary = max(15, int(_cfg("PRIMARY_TIMEFRAME_MINUTES", 15)))
+    if now.minute % primary == 0 and now.second < 55:
+        return now.replace(second=5, microsecond=0) + timedelta(minutes=1)
+    cadence = max(1, min(5, int(_cfg("SCAN_INTERVAL", 300)) // 60))
+    elapsed = now.minute % cadence
+    boundary = now.replace(second=5, microsecond=0) + timedelta(minutes=(cadence - elapsed) % cadence)
     if boundary <= now:
-        boundary += timedelta(minutes=minutes)
+        boundary += timedelta(minutes=cadence)
     return boundary
 
 
@@ -368,7 +375,7 @@ async def _provider_health_job(app: Any, notify: bool = False) -> None:
         active = status.get("active_provider", status.get("selected_primary"))
         LOGGER.info("Provider health: active=%s mode=%s healthy=%s degraded=%s", active, status.get("mode"), summary.get("healthy"), summary.get("degraded"))
         if notify and summary.get("degraded"):
-            await send_all(app, "DATA PROVIDER WARNING\n\nActive: %s\nMode: %s\nHealthy: %s\nDegraded: %s\nNew signals remain blocked when data is stale or invalid." % (active or "NONE", status.get("mode","NO DATA"), summary.get("healthy",0), summary.get("degraded",0)), "ADMIN")
+            LOGGER.warning("Verified market data is degraded; new invalid or stale signals remain blocked")
         if notify:
             for name in ("truedata", "gdfl"):
                 expires = (status.get(name) or {}).get("trial_expires_at")
@@ -377,7 +384,7 @@ async def _provider_health_job(app: Any, notify: bool = False) -> None:
                 try:
                     remaining = datetime.fromisoformat(expires.replace("Z", "+00:00")) - datetime.now().astimezone()
                     if remaining <= timedelta(days=2):
-                        await send_all(app, f"{name.upper()} TRIAL NOTICE\n\nThe configured market-data trial expires soon. Signals will fail over automatically and remain blocked when no verified Indian feed is available.", "ADMIN")
+                        LOGGER.warning("Configured market-data access expires within two days")
                         _TRIAL_WARNINGS_SENT.add(name)
                 except (TypeError, ValueError):
                     continue
@@ -390,7 +397,7 @@ async def _provider_health_job(app: Any, notify: bool = False) -> None:
                     is_stale = (_now().astimezone(last.tzinfo) - last).total_seconds() > stale_after
                     cooldown_ready = _TRADINGVIEW_STALE_WARNING_AT is None or (_now() - _TRADINGVIEW_STALE_WARNING_AT).total_seconds() >= 3600
                     if is_stale and cooldown_ready:
-                        await send_all(app, "TRADINGVIEW ALERT BRIDGE WARNING\n\nThe authorized alert feed is stale. New exact signals are blocked until fresh verified alerts resume.", "ADMIN")
+                        LOGGER.warning("Authorized alert feed is stale; exact signals remain blocked")
                         _TRADINGVIEW_STALE_WARNING_AT = _now()
             except Exception:
                 LOGGER.warning("TradingView bridge health check unavailable")
@@ -411,6 +418,29 @@ async def _late_update_job(app: Any, label: str) -> None:
     await _provider_health_job(app, notify=True)
 
 
+async def _next_session_outlook_job(app: Any, label: str) -> None:
+    """Publish refreshed NSE, Gold and Silver probability outlooks without fabricating inputs."""
+    try:
+        overnight = importlib.import_module("overnight_analysis")
+        report = await _safe_call(label, lambda: overnight.analyze_overnight(force_refresh=True))
+        if report:
+            text = await _safe_call("format NSE next-session outlook", overnight.format_overnight_report, report)
+            if text:
+                await send_all(app, f"SHIVAY NEXT SESSION OUTLOOK - NSE\n{label}\n\n{text}")
+    except Exception:
+        LOGGER.exception("NSE next-session outlook recovered from a module failure")
+    for module_name, title in (("gold", "SHIVAY MCX GOLD OUTLOOK"), ("silver", "SHIVAY MCX SILVER OUTLOOK")):
+        try:
+            module = importlib.import_module(module_name)
+            analysis = await _safe_call(f"{module_name} outlook", getattr(module, f"analyze_{module_name}"), True)
+            formatter = getattr(module, f"format_{module_name}_report")
+            text = await _safe_call(f"format {module_name} outlook", formatter, analysis)
+            if text:
+                await send_all(app, f"{title}\n{label}\n\n{text}", "MCX")
+        except Exception:
+            LOGGER.exception("%s next-session outlook recovered from a module failure", module_name)
+
+
 def _due(now: datetime, scheduled: time, completed: set[tuple[str, date]], name: str) -> bool:
     key = (name, now.date())
     return _market_day(now.date()) and now.time() >= scheduled and key not in completed
@@ -421,6 +451,8 @@ def _startup_completed(now: datetime) -> set[tuple[str, date]]:
     slots = {
         "morning": PREOPEN_TIME, "eod": EOD_TIME, "overnight": OVERNIGHT_TIME,
         "late_evening": LATE_EVENING_TIME, "late_night": LATE_NIGHT_TIME,
+        "outlook_2200": OUTLOOK_EVENING_TIME, "outlook_0100": OUTLOOK_OVERNIGHT_TIME,
+        "outlook_0800": OUTLOOK_PREOPEN_TIME,
     }
     return {(name, now.date()) for name, scheduled in slots.items() if now.time() >= scheduled}
 
@@ -456,6 +488,15 @@ async def scheduler(application: Any) -> None:
             if _due(now, PREOPEN_TIME, completed, "morning") and now.time() < MARKET_OPEN:
                 await _morning_job(application)
                 completed.add(("morning", now.date()))
+
+            for outlook_name, outlook_time, outlook_label in (
+                ("outlook_0100", OUTLOOK_OVERNIGHT_TIME, "01:00 IST OVERNIGHT UPDATE"),
+                ("outlook_0800", OUTLOOK_PREOPEN_TIME, "08:00 IST FINAL PRE-MARKET UPDATE"),
+                ("outlook_2200", OUTLOOK_EVENING_TIME, "22:00 IST EVENING UPDATE"),
+            ):
+                if _due(now, outlook_time, completed, outlook_name):
+                    await _next_session_outlook_job(application, outlook_label)
+                    completed.add((outlook_name, now.date()))
 
             if _market_open(now):
                 if now >= next_cache:

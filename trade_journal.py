@@ -29,8 +29,9 @@ _ALLOWED = (
     "timeframe_15m", "timeframe_30m", "timeframe_60m",
     "entry_confirmed", "cancelled", "cancel_reason", "smart_money_activity",
     "relative_weakness",
-    "signal_candle_high", "signal_candle_low", "signal_candle_close",
-    "signal_candle_timestamp", "entry_trigger_status", "entry_confirmation_reason",
+    "signal_candle_open", "signal_candle_high", "signal_candle_low", "signal_candle_close",
+    "signal_candle_timestamp", "confirmation_candle", "confirmation_candle_timestamp",
+    "chandelier_signal_level", "hard_invalidation_level", "entry_trigger_status", "entry_confirmation_reason",
     "active_chandelier_stop", "chandelier_15m", "chandelier_30m", "chandelier_60m",
     "config_version",
 )

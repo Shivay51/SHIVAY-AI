@@ -13,11 +13,16 @@ import config
 from data_quality import assess_market_data, validate_candles, validate_instrument_contract
 from dhan_provider import DhanProvider
 from gdfl_provider import GDFLProvider
+from groww_provider import GrowwProvider
 from instrument_master import resolve_instrument
 from market_hub_client import MarketHubClient
+from mcx_temporary_provider import MCXTemporaryProvider
+from nse_temporary_provider import NSETemporaryProvider
 from shoonya_provider import ShoonyaProvider
 from truedata_provider import TrueDataProvider
+from upstox_provider import UpstoxProvider
 from tradingview_bridge import TradingViewBridgeProvider
+from tvkit_provider import TVKitProvider
 from provider_cache import ProviderCache
 from provider_failover import ProviderUnavailable, execute_with_failover
 from provider_health import circuit_open, get_provider_health, rank_provider_names, record_failure, record_success
@@ -81,7 +86,9 @@ class YahooEmergencyProvider:
 
 
 class ProviderManager:
-    DEFAULT_PRIORITY=("tradingview_alert_bridge","truedata_primary","gdfl_primary","shoonya_primary","fyers_primary","dhan_primary","upstox_primary","angelone_primary","market_hub","yahoo_emergency")
+    # Compatibility order when no configured priority exists.  config.py places
+    # authenticated Groww first; the bridge remains the safe installation default.
+    DEFAULT_PRIORITY=("tradingview_alert_bridge","nse_temporary","tvkit_ohlcv","mcx_temporary","groww_primary","upstox_primary","dhan_primary","shoonya_primary","truedata_primary","gdfl_primary","fyers_primary","angelone_primary","market_hub","yahoo_emergency")
 
     @classmethod
     def _base_priority(cls)->dict[str,int]:
@@ -94,8 +101,13 @@ class ProviderManager:
         return {name:(len(ordered)-index)*300 for index,name in enumerate(ordered)}
 
     def __init__(self):
-        self.tradingview=TradingViewBridgeProvider();self.truedata=TrueDataProvider();self.gdfl=GDFLProvider();self.shoonya=ShoonyaProvider();self.dhan=DhanProvider();self.market_hub=MarketHubClient();self.yahoo=YahooEmergencyProvider();self.providers=[]
+        self.groww=GrowwProvider();self.upstox=UpstoxProvider();self.tradingview=TradingViewBridgeProvider();self.nse_temporary=NSETemporaryProvider();self.tvkit=TVKitProvider();self.mcx_temporary=MCXTemporaryProvider();self.truedata=TrueDataProvider();self.gdfl=GDFLProvider();self.shoonya=ShoonyaProvider();self.dhan=DhanProvider();self.market_hub=MarketHubClient();self.yahoo=YahooEmergencyProvider();self.providers=[]
+        if self.groww.available:self.providers.append(self.groww)
+        if self.upstox.available:self.providers.append(self.upstox)
         if self.tradingview.available:self.providers.append(self.tradingview)
+        if self.nse_temporary.available:self.providers.append(self.nse_temporary)
+        if self.tvkit.available:self.providers.append(self.tvkit)
+        if self.mcx_temporary.available:self.providers.append(self.mcx_temporary)
         if self.truedata.available:self.providers.append(self.truedata)
         if self.gdfl.available:self.providers.append(self.gdfl)
         if self.shoonya.available:self.providers.append(self.shoonya)
@@ -104,7 +116,7 @@ class ProviderManager:
         self.providers.append(self.yahoo)
 
     def _ranked(self, verified_only: bool = False) -> list[Any]:
-        values=[p for p in self.providers if not verified_only or p.name!="yahoo_emergency"]
+        values=[p for p in self.providers if not verified_only or (p.name!="yahoo_emergency" and getattr(p,"signal_capable",True))]
         by_name={p.name:p for p in values};return [by_name[name] for name in rank_provider_names(list(by_name),self._base_priority())]
 
     @staticmethod
@@ -160,10 +172,10 @@ class ProviderManager:
     def status(self) -> dict[str, Any]:
         verified=[p.name for p in self._ranked(True) if p.available];health=get_provider_health();healthy=[name for name in verified if health.get(name,{}).get("status")=="HEALTHY"]
         primary=healthy[0] if healthy else None;configured=verified[0] if verified else None
-        return {"selected_primary":primary,"configured_primary":configured,"selected_secondary":healthy[1] if len(healthy)>1 else None,"active_provider":primary or "yahoo_emergency","mode":"PRIMARY" if primary else "EMERGENCY_FALLBACK","verified_providers":healthy,"tradingview_configured":self.tradingview.available,"truedata_configured":self.truedata.client.configured,"truedata":self.truedata.client.health(),"gdfl_configured":self.gdfl.client.configured,"gdfl":self.gdfl.client.health(False),"shoonya_configured":self.shoonya.available,"shoonya":self.shoonya.client.health(),"dhan_configured":self.dhan.available,"market_hub_authenticated_provider":self.market_hub.available,"market_hub_market_data_supported":False,"fallback":"yahoo_emergency_context_only","providers":[p.name for p in self._ranked()],"supported_provider_priority":list(self.DEFAULT_PRIORITY),"health":health}
+        return {"selected_primary":primary,"configured_primary":configured,"selected_secondary":healthy[1] if len(healthy)>1 else None,"active_provider":primary or "yahoo_emergency","mode":"PRIMARY" if primary else "EMERGENCY_FALLBACK","verified_providers":healthy,"groww_configured":self.groww.configured,"groww":self.groww.health_check(),"upstox_configured":self.upstox.configured,"upstox":self.upstox.health_check(),"tradingview_configured":self.tradingview.available,"tvkit":self.tvkit.health_check(),"nse_temporary":self.nse_temporary.health_check(),"mcx_temporary":self.mcx_temporary.health_check(),"truedata_configured":self.truedata.client.configured,"truedata":self.truedata.client.health(),"gdfl_configured":self.gdfl.client.configured,"gdfl":self.gdfl.client.health(False),"shoonya_configured":self.shoonya.available,"shoonya":self.shoonya.client.health(),"dhan_configured":self.dhan.available,"market_hub_authenticated_provider":self.market_hub.available,"market_hub_market_data_supported":False,"fallback":"yahoo_emergency_context_only","providers":[p.name for p in self._ranked()],"supported_provider_priority":list(self.DEFAULT_PRIORITY),"health":health}
 
     def close(self)->bool:
-        for provider in (self.truedata,self.gdfl,self.shoonya):
+        for provider in (self.groww,self.upstox,self.nse_temporary,self.tvkit,self.mcx_temporary,self.truedata,self.gdfl,self.shoonya):
             try:provider.close()
             except Exception:pass
         return True

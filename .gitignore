@@ -24,6 +24,10 @@ storage/
 users.json
 chat_ids.json
 security_audit.jsonl
+admin_audit.jsonl
+performance_data.json
+performance_data.json.bak
+temp_smoke_test.py
 *.zip
 *.tmp
 .pytest_cache/

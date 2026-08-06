@@ -52,7 +52,7 @@ def add_trade(trade):
         "track_outcome": bool(trade.get("track_outcome", True)),
         "time_to_sl": None, "time_to_t1": None, "time_to_t2": None, "time_to_t3": None,
     }
-    for key in ("market", "regime", "nifty_direction", "banknifty_direction", "sector", "sector_strength", "relative_strength", "signal_context_score", "timeframe_5m", "timeframe_15m", "timeframe_30m", "timeframe_60m", "adx", "rsi", "atr", "vwap", "relative_volume", "support", "resistance", "risk_reward", "valid_until", "data_timestamp", "telegram_time", "instrument_type", "entry_zone", "requires_entry_confirmation", "signal_candle", "signal_candle_high", "signal_candle_low", "signal_candle_close", "signal_candle_timestamp", "entry_trigger_status", "chandelier_15m", "chandelier_30m", "chandelier_60m"):
+    for key in ("market", "regime", "nifty_direction", "banknifty_direction", "sector", "sector_strength", "relative_strength", "signal_context_score", "timeframe_5m", "timeframe_15m", "timeframe_30m", "timeframe_60m", "adx", "rsi", "atr", "vwap", "relative_volume", "support", "resistance", "risk_reward", "valid_until", "data_timestamp", "telegram_time", "instrument_type", "entry_zone", "requires_entry_confirmation", "signal_candle", "signal_candle_open", "signal_candle_high", "signal_candle_low", "signal_candle_close", "signal_candle_timestamp", "confirmation_candle", "confirmation_candle_timestamp", "chandelier_signal_level", "hard_invalidation_level", "entry_trigger_status", "entry_confirmation_reason", "chandelier_15m", "chandelier_30m", "chandelier_60m"):
         if key in trade: tracked[key] = trade[key]
     _active_trades[symbol] = tracked
 
@@ -282,7 +282,16 @@ def monitor_trade(trade, price, market=None, score_data=None):
                 "closed": False, **{key: trade.get(key) for key in trade}}
     trade["highest_price"] = max(float(trade.get("highest_price", price)), float(price))
     trade["lowest_price"] = min(float(trade.get("lowest_price", price)), float(price))
-    if check_stoploss(trade, price):
+    invalidation = float(trade.get("hard_invalidation_level") or (trade.get("signal_candle_low") if trade["side"] == "BUY" else trade.get("signal_candle_high")) or 0)
+    hard_invalidated = invalidation > 0 and ((trade["side"] == "BUY" and float(price) < invalidation)
+                                             or (trade["side"] == "SELL" and float(price) > invalidation))
+    active_chandelier = float(trade.get("active_chandelier_stop") or 0)
+    chandelier_invalidated = check_trailing_stop(trade, price, active_chandelier)
+    if hard_invalidated:
+        action, updated_stop = "SIGNAL CANDLE INVALIDATION", 0.0
+    elif chandelier_invalidated:
+        action, updated_stop = "CHANDELIER EXIT", active_chandelier
+    elif check_stoploss(trade, price):
         action, updated_stop = "STOP LOSS HIT", 0.0
     else:
         candle_exit = _apply_completed_candle_trail(trade, market)
@@ -313,9 +322,9 @@ def monitor_trade(trade, price, market=None, score_data=None):
                 trade["sl"] = max(float(trade["sl"]), updated_stop)
             else:
                 trade["sl"] = min(float(trade["sl"]), updated_stop)
-    elif action in {"FULL EXIT", "CHANDELIER EXIT"}:
+    elif action in {"FULL EXIT", "CHANDELIER EXIT", "SIGNAL CANDLE INVALIDATION"}:
         trade["closed"] = True
-        trade["failure_cause"] = "strategy_exit"
+        trade["failure_cause"] = "signal_candle_invalidation" if action == "SIGNAL CANDLE INVALIDATION" else "strategy_exit"
 
     aligned_hold = (score_data or {}).get("timeframe_30m") in ({"BULLISH"} if trade["side"] == "BUY" else {"BEARISH"})
     chandelier_hold = (score_data or {}).get("chandelier_15m", {}).get("trend") in (None, "BULLISH" if trade["side"] == "BUY" else "BEARISH")

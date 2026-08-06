@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
@@ -12,15 +13,15 @@ from indicators import atr_series
 
 def _settings(period: int | None = None, multiplier: float | None = None) -> tuple[int, float]:
     try:
-        lookback = max(2, int(period if period is not None else getattr(config, "CHANDELIER_ATR_PERIOD", 22)))
+        lookback = max(2, int(period if period is not None else getattr(config, "CHANDELIER_ATR_PERIOD", 7)))
     except (TypeError, ValueError, OverflowError):
-        lookback = 22
+        lookback = 7
     try:
-        factor = float(multiplier if multiplier is not None else getattr(config, "CHANDELIER_ATR_MULTIPLIER", 3.0))
+        factor = float(multiplier if multiplier is not None else getattr(config, "CHANDELIER_ATR_MULTIPLIER", 2.0))
     except (TypeError, ValueError, OverflowError):
-        factor = 3.0
+        factor = 2.0
     if not math.isfinite(factor) or factor <= 0:
-        factor = 3.0
+        factor = 2.0
     return min(lookback, 500), min(factor, 20.0)
 
 
@@ -107,6 +108,80 @@ def _timeframe_ohlc(market: Mapping[str, Any], minutes: int) -> tuple[list[float
     return (frame["high"].groupby(group).max().tolist(), frame["low"].groupby(group).min().tolist(), frame["close"].groupby(group).last().tolist())
 
 
+def _timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, (int, float)):
+        try:
+            parsed = datetime.fromtimestamp(float(value) / (1000 if float(value) > 10_000_000_000 else 1), timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+
+
+def get_timeframe_candles(market: Mapping[str, Any], minutes: int = 15) -> list[dict[str, Any]]:
+    """Aggregate base candles while preserving the currently forming timeframe candle."""
+    base = max(1, int(market.get("interval_minutes", 5) or 5))
+    if minutes < base or minutes % base:
+        return []
+    factor = max(1, minutes // base)
+    raw = market.get("candles")
+    rows = []
+    if isinstance(raw, list):
+        rows = [dict(row) for row in raw if isinstance(row, Mapping)]
+    if not rows:
+        try:
+            highs = list(market.get("high", [])); lows = list(market.get("low", [])); closes = list(market.get("close", []))
+            opens = list(market.get("open", []))
+            size = min(len(highs), len(lows), len(closes))
+            rows = [{"open": opens[index] if index < len(opens) else (closes[index - 1] if index else closes[index]),
+                     "high": highs[index], "low": lows[index], "close": closes[index],
+                     "timestamp": None, "completed": True}
+                    for index in range(size)]
+        except (TypeError, ValueError):
+            return []
+    if len(rows) < factor:
+        return []
+    aggregated = []
+    for start in range(0, len(rows), factor):
+        group = rows[start:start + factor]
+        if len(group) < factor and all(row.get("completed", row.get("complete", True)) is not False for row in group):
+            continue
+        try:
+            candle = {
+                "open": float(group[0].get("open", group[0]["close"])),
+                "high": max(float(row["high"]) for row in group),
+                "low": min(float(row["low"]) for row in group),
+                "close": float(group[-1]["close"]),
+                "timestamp": group[0].get("timestamp"), "timeframe": f"{minutes}m",
+                "complete": len(group) == factor and all(
+                    row.get("completed", row.get("complete", True)) is not False for row in group
+                ),
+            }
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if min(candle["open"], candle["high"], candle["low"], candle["close"]) <= 0:
+            continue
+        if candle["high"] < max(candle["open"], candle["low"], candle["close"]):
+            continue
+        if candle["low"] > min(candle["open"], candle["high"], candle["close"]):
+            continue
+        aggregated.append(candle)
+    return aggregated
+
+
+def get_completed_timeframe_candles(market: Mapping[str, Any], minutes: int = 15) -> list[dict[str, Any]]:
+    """Return only fully closed timeframe candles."""
+    return [candle for candle in get_timeframe_candles(market, minutes) if candle.get("complete")]
+
+
 def calculate_timeframe_chandelier(market: Mapping[str, Any], minutes: int, **kwargs: Any) -> dict[str, Any]:
     high, low, close = _timeframe_ohlc(market, minutes)
     result = calculate_chandelier_exit(high, low, close, **kwargs)
@@ -116,35 +191,79 @@ def calculate_timeframe_chandelier(market: Mapping[str, Any], minutes: int, **kw
 
 def get_completed_signal_candle(market: Mapping[str, Any], minutes: int = 15) -> dict[str, Any] | None:
     """Return the latest explicitly aggregated completed candle."""
-    base = max(1, int(market.get("interval_minutes", 5) or 5))
-    if minutes < base or minutes % base:
-        return None
-    factor = max(1, minutes // base)
-    candles = market.get("candles")
-    if isinstance(candles, list) and candles:
-        rows = [row for row in candles if isinstance(row, Mapping)]
-        if rows and rows[-1].get("complete") is False:
-            rows = rows[:-1]
-        usable = len(rows) - (len(rows) % factor)
-        if usable < factor:
-            return None
-        group = rows[usable - factor:usable]
-        try:
-            high = max(float(row["high"]) for row in group)
-            low = min(float(row["low"]) for row in group)
-            close = float(group[-1]["close"])
-            opened = float(group[0].get("open", group[0]["close"]))
-        except (KeyError, TypeError, ValueError, OverflowError):
-            return None
-        if min(high, low, close, opened) <= 0 or high < max(low, close, opened) or low > min(high, close, opened):
-            return None
-        return {"open": opened, "high": high, "low": low, "close": close,
-                "timestamp": group[-1].get("timestamp"), "timeframe": f"{minutes}m", "complete": True}
-    high, low, close = _timeframe_ohlc(market, minutes)
-    if not close:
-        return None
-    return {"open": close[-2] if len(close) > 1 else close[-1], "high": high[-1], "low": low[-1],
-            "close": close[-1], "timestamp": market.get("timestamp"), "timeframe": f"{minutes}m", "complete": True}
+    candles = get_completed_timeframe_candles(market, minutes)
+    return dict(candles[-1]) if candles else None
+
+
+def evaluate_chandelier_entry_state(
+    market: Mapping[str, Any], minutes: int = 15, *, now: datetime | None = None,
+) -> dict[str, Any]:
+    """Confirm a closed Chandelier signal from the next candle's first live minute."""
+    all_candles = get_timeframe_candles(market, minutes)
+    candles = [candle for candle in all_candles if candle.get("complete")]
+    live = next((candle for candle in reversed(all_candles) if not candle.get("complete")), None)
+    period, multiplier = _settings()
+    empty = {
+        "valid": False, "confirmed": False, "status": "NO_SIGNAL", "side": None,
+        "reason": "insufficient_completed_candles", "signal_candle": None,
+        "confirmation_candle": None, "chandelier_level": None,
+        "hard_invalidation_level": None, "timeframe": f"{minutes}m",
+    }
+    if len(candles) < period + 2:
+        return empty
+
+    def state(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        return calculate_chandelier_exit(
+            [row["high"] for row in rows], [row["low"] for row in rows], [row["close"] for row in rows],
+            period=period, multiplier=multiplier,
+        )
+
+    before_signal, at_signal = state(candles[:-1]), state(candles)
+    changed = (before_signal.get("valid") and at_signal.get("valid")
+               and before_signal.get("direction") != at_signal.get("direction"))
+    if not changed:
+        return {**empty, "reason": "latest_completed_candle_has_no_chandelier_direction_change", "chandelier": at_signal}
+    side = "BUY" if at_signal["direction"] > 0 else "SELL"
+    signal = dict(candles[-1])
+    signal["chandelier_level"] = at_signal.get("current_stop")
+    base = {
+        **empty, "valid": True, "status": "PENDING_CONFIRMATION", "side": side,
+        "reason": "waiting_for_next_candle_first_minute", "signal_candle": signal,
+        "chandelier_level": at_signal.get("current_stop"), "chandelier": at_signal,
+        "hard_invalidation_level": signal["low" if side == "BUY" else "high"],
+    }
+    if not live:
+        return base
+    confirmation = dict(live)
+    signal_started = _timestamp(signal.get("timestamp"))
+    confirmation_started = _timestamp(confirmation.get("timestamp"))
+    if signal_started is not None and confirmation_started is not None:
+        seconds_after_signal_start = (confirmation_started - signal_started).total_seconds()
+        if not (minutes * 60 - 5 <= seconds_after_signal_start < (minutes + 2) * 60):
+            return {**base, "reason": "waiting_for_immediate_next_15m_candle"}
+    live_price = market.get("price", market.get("last_price"))
+    try:
+        if live_price is not None and float(live_price) > 0:
+            confirmation["close"] = float(live_price)
+    except (TypeError, ValueError, OverflowError):
+        pass
+    evaluated_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    started_at = confirmation_started
+    elapsed = float(market.get("confirmation_elapsed_seconds", 0) or 0)
+    if started_at is not None:
+        elapsed = max(elapsed, (evaluated_at - started_at).total_seconds())
+    minimum = max(45, int(getattr(config, "CHANDELIER_CONFIRMATION_SECONDS", 60)))
+    if elapsed < minimum:
+        return {**base, "confirmation_candle": confirmation, "confirmation_elapsed_seconds": round(max(0, elapsed), 1)}
+    favourable = confirmation["close"] > confirmation["open"] if side == "BUY" else confirmation["close"] < confirmation["open"]
+    confirmed = bool(favourable)
+    return {
+        **base, "confirmed": confirmed,
+        "status": "CONFIRMED" if confirmed else "REJECTED", "side": side,
+        "reason": "next_candle_first_minute_confirmed" if confirmed else "next_candle_first_minute_moved_against_signal",
+        "signal_candle": signal, "confirmation_candle": confirmation,
+        "confirmation_elapsed_seconds": round(elapsed, 1), "evaluated_at": evaluated_at,
+    }
 
 
 def get_chandelier_trend(*args: Any, **kwargs: Any) -> str:

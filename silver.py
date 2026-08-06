@@ -8,6 +8,7 @@ import importlib.util
 import inspect
 import logging
 import math
+import os
 import threading
 import time
 from copy import deepcopy
@@ -18,7 +19,7 @@ from zoneinfo import ZoneInfo
 import config
 from audience_router import recipients
 from multitimeframe import analyze_timeframes
-from chandelier_exit import calculate_timeframe_chandelier
+from chandelier_exit import calculate_timeframe_chandelier, evaluate_chandelier_entry_state
 
 
 LOGGER = logging.getLogger("shivay.silver")
@@ -401,7 +402,17 @@ def _build_analysis() -> dict[str, Any]:
     close = [item["close"] for item in records]
     volume = [item["volume"] for item in records]
     timeframes = analyze_timeframes({"close": close, "interval_minutes": 5})
-    chandelier_market = {"high": high, "low": low, "close": close, "interval_minutes": 5}
+    chandelier_market = {
+        "open": open_values, "high": high, "low": low, "close": close,
+        "interval_minutes": 5,
+        "candles": [{
+            "timestamp": item.get("timestamp"), "open": item["open"], "high": item["high"],
+            "low": item["low"], "close": item["close"], "volume": item.get("volume", 0.0),
+            "completed": not isinstance(item.get("timestamp"), datetime)
+            or item["timestamp"] + timedelta(minutes=5) <= now,
+        } for item in records],
+    }
+    chandelier_entry = evaluate_chandelier_entry_state(chandelier_market, 15)
     chandelier_15m = calculate_timeframe_chandelier(chandelier_market, 15)
     chandelier_30m = calculate_timeframe_chandelier(chandelier_market, 30)
     chandelier_60m = calculate_timeframe_chandelier(chandelier_market, 60)
@@ -464,6 +475,10 @@ def _build_analysis() -> dict[str, Any]:
     normal_volatility = 0.08 <= atr_percent <= 2.5
     volume_confirmed = relative_volume is not None and relative_volume >= 0.80
     gold = _gold_confirmation()
+    try:
+        global_context = importlib.import_module("global_metals_context").get_global_metals_context()
+    except Exception:
+        global_context = {"silver_bias": "SIDEWAYS", "silver_confidence": 0, "degraded": True}
 
     buy_score = sell_score = 0.0
     reasons: list[str] = []
@@ -528,16 +543,21 @@ def _build_analysis() -> dict[str, Any]:
             buy_score += 3
         elif gold["direction"] == "BEARISH":
             sell_score += 3
+    if global_context.get("silver_bias") == "BULLISH":
+        buy_score += min(10, _number(global_context.get("silver_confidence")) / 10)
+    elif global_context.get("silver_bias") == "BEARISH":
+        sell_score += min(10, _number(global_context.get("silver_confidence")) / 10)
 
     buy_score = _clamp(buy_score)
     sell_score = _clamp(sell_score)
-    leading_side = "BUY" if buy_score > sell_score else "SELL"
-    leading_score = max(buy_score, sell_score)
+    leading_side = str(chandelier_entry.get("side") or "NO TRADE").upper()
+    leading_score = buy_score if leading_side == "BUY" else sell_score if leading_side == "SELL" else 0.0
     score_margin = abs(buy_score - sell_score)
-    setup_valid = (buy_breakout or buy_retest or buy_pullback) if leading_side == "BUY" else (sell_breakout or sell_retest or sell_pullback)
+    setup_valid = ((buy_breakout or buy_retest or buy_pullback) if leading_side == "BUY"
+                   else (sell_breakout or sell_retest or sell_pullback) if leading_side == "SELL" else False)
     fake_risk = fake_buy_risk if leading_side == "BUY" else fake_sell_risk
-    directional_momentum = momentum_short > 0 if leading_side == "BUY" else momentum_short < 0
-    expected_timeframe = "BULLISH" if leading_side == "BUY" else "BEARISH"
+    directional_momentum = momentum_short > 0 if leading_side == "BUY" else momentum_short < 0 if leading_side == "SELL" else False
+    expected_timeframe = "BULLISH" if leading_side == "BUY" else "BEARISH" if leading_side == "SELL" else "UNAVAILABLE"
     timeframe_confirmed = bool(
         timeframes.get("60m") == expected_timeframe
         and timeframes.get("30m") == expected_timeframe
@@ -545,7 +565,9 @@ def _build_analysis() -> dict[str, Any]:
         and timeframes.get("5m") in {expected_timeframe, "SIDEWAYS"}
     )
     chandelier_confirmed = bool(
-        chandelier_15m.get("trend") == expected_timeframe
+        chandelier_entry.get("confirmed")
+        and chandelier_entry.get("status") == "CONFIRMED"
+        and chandelier_15m.get("trend") == expected_timeframe
         and chandelier_30m.get("trend") == expected_timeframe
         and chandelier_15m.get("valid") and chandelier_30m.get("valid")
     )
@@ -589,7 +611,7 @@ def _build_analysis() -> dict[str, Any]:
     if not timeframe_confirmed:
         reasons.append("60m, 30m, 15m and 5m timing are not aligned")
     if not chandelier_confirmed:
-        reasons.append("15m and 30m Chandelier confirmation is unavailable or conflicting")
+        reasons.append(str(chandelier_entry.get("reason") or "15m Chandelier signal and next-candle confirmation are unavailable"))
     if signal_valid:
         reasons.extend([
             f"{leading_side} trend alignment is confirmed",
@@ -604,6 +626,8 @@ def _build_analysis() -> dict[str, Any]:
         "entry": 0.0, "sl": 0.0, "target1": 0.0, "target2": 0.0, "target3": 0.0
     }
     if signal_valid:
+        signal_candle = chandelier_entry.get("signal_candle") or {}
+        hard_invalidation = _number(signal_candle.get("low" if leading_side == "BUY" else "high"))
         chandelier_stop = _number(chandelier_15m.get("current_stop"))
         if leading_side == "BUY" and 0 < chandelier_stop < plan["entry"]:
             plan["sl"] = round(max(plan["sl"], chandelier_stop), 2)
@@ -611,6 +635,10 @@ def _build_analysis() -> dict[str, Any]:
         elif leading_side == "SELL" and chandelier_stop > plan["entry"]:
             plan["sl"] = round(min(plan["sl"], chandelier_stop), 2)
             plan["sl"] = max(plan["sl"], round(plan["entry"] + atr_value * 0.75, 2))
+        if leading_side == "BUY" and 0 < hard_invalidation < plan["entry"]:
+            plan["sl"] = max(plan["sl"], hard_invalidation)
+        elif leading_side == "SELL" and hard_invalidation > plan["entry"]:
+            plan["sl"] = min(plan["sl"], hard_invalidation)
         adjusted_risk = abs(plan["entry"] - plan["sl"])
         direction = 1 if leading_side == "BUY" else -1
         plan["target1"], plan["target2"], plan["target3"] = (
@@ -669,7 +697,12 @@ def _build_analysis() -> dict[str, Any]:
         "tradeable": signal_valid,
         "timeframes": timeframes,
         "chandelier": {"15m": chandelier_15m, "30m": chandelier_30m, "60m": chandelier_60m},
-        "entry_trigger_status": "PENDING" if signal_valid else "INACTIVE",
+        "chandelier_entry_state": chandelier_entry,
+        "signal_candle": chandelier_entry.get("signal_candle"),
+        "confirmation_candle": chandelier_entry.get("confirmation_candle"),
+        "hard_invalidation_level": chandelier_entry.get("hard_invalidation_level"),
+        "entry_confirmed": signal_valid,
+        "entry_trigger_status": "CONFIRMED" if signal_valid else chandelier_entry.get("status", "INACTIVE"),
         "degraded": stale,
         "reasons": reasons,
         "indicators": {
@@ -726,11 +759,36 @@ def analyze_silver(force_refresh: bool = False) -> dict[str, Any]:
             and monotonic_now - _analysis_cache_time < CACHE_SECONDS
         ):
             return deepcopy(_analysis_cache)
+        quote = None
         try:
-            result = _build_analysis()
+            quote = importlib.import_module("mcx_temporary_provider").MCXTemporaryProvider().get_quote("MCX SILVER")
+        except Exception:
+            pass
+        authenticated_mcx = any(os.getenv(name, "").strip() for name in (
+            "TVKIT_AUTH_TOKEN", "GROWW_ACCESS_TOKEN", "UPSTOX_ACCESS_TOKEN", "DHAN_ACCESS_TOKEN",
+            "SHOONYA_API_KEY", "TRUEDATA_USERNAME", "GDFL_API_KEY",
+        ))
+        try:
+            result = _build_analysis() if authenticated_mcx or not quote else _empty_analysis("Verified MCX candles are unavailable")
         except Exception:
             LOGGER.exception("Silver analysis degraded safely")
             result = _empty_analysis("Silver analysis failed because one or more inputs are unavailable")
+        if not result.get("data_available"):
+            try:
+                if quote and _number(quote.get("price")) > 0:
+                    try:
+                        context = importlib.import_module("global_metals_context").get_global_metals_context()
+                    except Exception:
+                        context = {"silver_bias": "SIDEWAYS"}
+                    result.update(data_available=True, indian_mcx_quote=True, price=_number(quote["price"]),
+                                  data_source="TradingView MCX scanner", last_data_time=quote.get("retrieved_at"),
+                                  trading_symbol=quote.get("trading_symbol"), expiry=quote.get("expiry"),
+                                  volume=quote.get("volume"), open_interest=quote.get("open_interest"),
+                                  stale=False, trend=context.get("silver_bias", "SIDEWAYS"), regime=context.get("silver_bias", "SIDEWAYS"), degraded=True,
+                                  global_confirmation=context,
+                                  reasons=["Live MCX quote received; exchange timestamp and candles are unavailable"])
+            except Exception:
+                LOGGER.warning("Silver quote-only fallback unavailable")
         _analysis_cache = result
         _analysis_cache_time = monotonic_now
         _analysis_cache_day = now.date()
@@ -786,7 +844,6 @@ def _format_silver_report_legacy(analysis: Mapping[str, Any] | None = None) -> s
     indicators = data.get("indicators", {}) if isinstance(data.get("indicators"), Mapping) else {}
     reasons = data.get("reasons", []) if isinstance(data.get("reasons"), list) else []
     reason_text = "\n".join(f"â€¢ {str(reason)[:180]}" for reason in reasons[:6]) or "â€¢ No additional detail"
-    source = data.get("data_source") or "UNAVAILABLE"
     freshness = "STALE" if data.get("stale") else "LIVE/CURRENT" if data.get("data_available") else "UNAVAILABLE"
     return (
         "ðŸŸ¨ SHIVAY AI â€” SILVER ANALYSIS\n\n"
@@ -803,10 +860,10 @@ def _format_silver_report_legacy(analysis: Mapping[str, Any] | None = None) -> s
         f"EMA 20/50/200: {indicators.get('ema20', 'N/A')} / {indicators.get('ema50', 'N/A')} / {indicators.get('ema200', 'N/A')}\n"
         f"RSI: {indicators.get('rsi', 'N/A')} | ADX: {indicators.get('adx', 'N/A')} | ATR: {indicators.get('atr', 'N/A')}\n"
         f"VWAP: {indicators.get('vwap', 'N/A')} | Relative Volume: {indicators.get('relative_volume', 'N/A')}\n\n"
-        f"DATA: {freshness} | Source: {source}\n"
+        f"DATA: {freshness}\n"
         f"MCX Session: {'OPEN' if data.get('market_open') else 'CLOSED'}\n\n"
         f"REASONS\n{reason_text}\n\n"
-        "Silver signals are probability-based, not guaranteed. The Yahoo source is a global futures proxy, not an MCX live quote."
+        "Silver signals are probability-based, not guaranteed. Unverified values never authorize a trade."
     )
 
 
@@ -815,7 +872,6 @@ def format_silver_details(analysis: Mapping[str, Any] | None = None) -> str:
     indicators = data.get("indicators", {}) if isinstance(data.get("indicators"), Mapping) else {}
     reasons = data.get("reasons", []) if isinstance(data.get("reasons"), list) else []
     reason_text = "\n".join(f"- {str(reason)[:180]}" for reason in reasons[:6]) or "- No additional detail"
-    source = data.get("data_source") or "UNAVAILABLE"
     chandelier = data.get("chandelier", {}) if isinstance(data.get("chandelier"), Mapping) else {}
     chandelier_15 = chandelier.get("15m", {}) if isinstance(chandelier.get("15m"), Mapping) else {}
     chandelier_30 = chandelier.get("30m", {}) if isinstance(chandelier.get("30m"), Mapping) else {}
@@ -839,12 +895,12 @@ def format_silver_details(analysis: Mapping[str, Any] | None = None) -> str:
         f"RSI: {indicators.get('rsi', 'N/A')} | ADX: {indicators.get('adx', 'N/A')} | ATR: {indicators.get('atr', 'N/A')}\n"
         f"VWAP: {indicators.get('vwap', 'N/A')} | Relative Volume: {indicators.get('relative_volume', 'N/A')}\n\n"
         f"CHANDELIER 15m: {chandelier_15.get('trend', 'UNAVAILABLE')} | Stop: {chandelier_15.get('current_stop', 'N/A')}\n"
-        f"CHANDELIER 30m: {chandelier_30.get('trend', 'UNAVAILABLE')} | ATR: {chandelier_30.get('atr_period', 22)} x {chandelier_30.get('atr_multiplier', 3.0)}\n"
+        f"CHANDELIER 30m: {chandelier_30.get('trend', 'UNAVAILABLE')} | ATR: {chandelier_30.get('atr_period', 7)} x {chandelier_30.get('atr_multiplier', 2.0)}\n"
         f"Entry Trigger: {data.get('entry_trigger_status', 'INACTIVE')}\n\n"
-        f"DATA: {freshness} | Source: {source}\n"
+        f"DATA: {freshness}\n"
         f"MCX Session: {'OPEN' if data.get('market_open') else 'CLOSED'}\n\n"
         f"REASONS\n{reason_text}\n\n"
-        "Silver signals are probability-based, not guaranteed. The Yahoo source is a global futures proxy, not an MCX live quote."
+        "Silver signals are probability-based, not guaranteed. Unverified values never authorize a trade."
     )
 
 

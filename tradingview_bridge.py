@@ -9,6 +9,7 @@ from data_quality import assess_market_data,validate_candles,validate_instrument
 from provider_failover import ProviderUnavailable
 from tradingview_cache import get_tradingview_cache
 from tradingview_payload import TradingViewPayload
+from chandelier_exit import evaluate_chandelier_entry_state
 
 LOGGER=logging.getLogger("shivay.tradingview.bridge");ROOT=Path(__file__).resolve().parent
 def _enabled()->bool:return os.getenv("TRADINGVIEW_WEBHOOK_ENABLED","false").strip().lower() in {"1","true","yes","on"}
@@ -99,25 +100,34 @@ async def process_accepted_payload(application:Any,payload:TradingViewPayload)->
     if not mapping or not aligned:return {"decision":"WAIT","reason":"timeframes_not_aligned"}
     if any(item.get("source") in {"TRADINGVIEW_STANDARD_ALERT","TRADINGVIEW_STANDARD_ALERT_BRIDGE"} and not item.get("ready") for item in aligned.values()):
         return {"decision":"WAIT","reason":"warming_up"}
+    cache=get_tradingview_cache();bars15=cache.bars(payload.symbol,15,aligned[15].get("contract_text"),aligned[15].get("category"))
+    candle_rows=[{"timestamp":row.get("bar_timestamp"),"open":row.get("open"),"high":row.get("high"),"low":row.get("low"),"close":row.get("close"),"volume":row.get("volume",0),"completed":row.get("bar_confirmed",False)} for row in bars15]
+    first_minute=cache.latest(payload.symbol,1,aligned[15].get("contract_text"),aligned[15].get("category"))
+    if first_minute:candle_rows.append({"timestamp":first_minute.get("bar_timestamp"),"open":first_minute.get("open"),"high":first_minute.get("high"),"low":first_minute.get("low"),"close":first_minute.get("close"),"volume":first_minute.get("volume",0),"completed":False})
+    entry_state=evaluate_chandelier_entry_state({"interval_minutes":15,"candles":candle_rows,"price":first_minute.get("close") if first_minute else None,"confirmation_elapsed_seconds":60 if first_minute else 0},15)
+    if not entry_state.get("confirmed"):return {"decision":"WAIT","reason":entry_state.get("reason","chandelier_confirmation_missing")}
     d60,d30,d15=_direction(aligned[60]),_direction(aligned[30]),_direction(aligned[15]);latest=aligned[5]
-    side=d60 if d60==d30==d15 and d60 in {"BUY","SELL"} else "WAIT"
+    side=str(entry_state.get("side")) if d60==d30==d15==entry_state.get("side") else "WAIT"
     if side=="WAIT" or not aligned[15]["bar_confirmed"]:return {"decision":"WAIT","reason":"direction_not_confirmed"}
-    signal=aligned[15];atr=float(signal["atr"]);price=float(latest["close"])
+    signal=aligned[15];signal_candle=entry_state["signal_candle"];confirmation_candle=entry_state["confirmation_candle"];atr=float(signal["atr"]);price=float(latest["close"])
     side_setup=signal.get("preliminary_buy") if side=="BUY" else signal.get("preliminary_sell")
     momentum_ok=signal.get("macd_histogram",0)>0 and 48<=signal.get("rsi",0)<=76 if side=="BUY" else signal.get("macd_histogram",0)<0 and 24<=signal.get("rsi",100)<=52
     if atr<=0 or signal["adx"]<18 or signal["relative_volume"]<0.75 or not signal.get("setup_valid") or not side_setup or not momentum_ok:return {"decision":"WAIT","reason":"setup_quality_weak"}
     buffer=atr*max(0,float(getattr(__import__('config'),"ENTRY_BREAK_BUFFER_ATR",.05)))
-    activated=price>=signal["signal_candle_high"]+buffer if side=="BUY" else price<=signal["signal_candle_low"]-buffer
+    activated=price>=float(signal_candle["close"])-buffer if side=="BUY" else price<=float(signal_candle["close"])+buffer
     if not activated:return {"decision":"WAIT","reason":"entry_not_activated"}
-    if (side=="BUY" and price-signal["signal_candle_high"]>atr*.75) or (side=="SELL" and signal["signal_candle_low"]-price>atr*.75):return {"decision":"WAIT","reason":"entry_missed"}
+    if (side=="BUY" and price-float(confirmation_candle["close"])>atr*.75) or (side=="SELL" and float(confirmation_candle["close"])-price>atr*.75):return {"decision":"WAIT","reason":"entry_missed"}
     from tradeplan import create_trade_plan
     plan=create_trade_plan(price,atr,side,{"support":signal["swing_low"],"resistance":signal["swing_high"],"ema20":signal["ema20"],"vwap":signal["vwap"],"chandelier_15m":{"long_stop":signal["chandelier_long_stop"],"short_stop":signal["chandelier_short_stop"]}})
+    hard_invalidation=float(signal_candle["low"] if side=="BUY" else signal_candle["high"])
+    plan["sl"]=max(float(plan["sl"]),hard_invalidation) if side=="BUY" else min(float(plan["sl"]),hard_invalidation)
+    if (side=="BUY" and plan["sl"]>=plan["entry"]) or (side=="SELL" and plan["sl"]<=plan["entry"]):return {"decision":"WAIT","reason":"signal_candle_invalidation_makes_risk_invalid"}
     if not all(float(plan.get(k) or 0)>0 for k in ("entry","sl","target1","target2","target3")):return {"decision":"WAIT","reason":"levels_unavailable"}
     strong=signal["adx"]>=28 and signal["relative_volume"]>=1.2;decision=f"STRONG {side}" if strong else side;internal=str(mapping["symbol"])
     if str(mapping.get("segment","")).upper()=="NSE_FNO":
         supported,reason=_nse_market_support(side)
         if not supported:return {"decision":"WAIT","reason":reason}
-    trade={**plan,"symbol":internal,"decision":decision,"side":side,"price":price,"atr":atr,"support":signal["swing_low"],"resistance":signal["swing_high"],"trend":"STRONG BULLISH" if side=="BUY" and strong else "STRONG BEARISH" if strong else "BULLISH" if side=="BUY" else "BEARISH","signal_candle_high":signal["signal_candle_high"],"signal_candle_low":signal["signal_candle_low"],"signal_candle_close":signal["close"],"signal_candle_timestamp":signal["bar_timestamp"].isoformat(),"entry_confirmed":True,"requires_entry_confirmation":False,"provider":TradingViewBridgeProvider.name,"market_category":"MCX" if mapping.get("exchange")=="MCX" else "NSE F&O","segment":mapping.get("segment"),"instrument_type":mapping.get("instrument_type"),"valid_until":(datetime.now(timezone.utc)+timedelta(minutes=18)).isoformat()}
+    trade={**plan,"symbol":internal,"decision":decision,"side":side,"price":price,"atr":atr,"support":signal["swing_low"],"resistance":signal["swing_high"],"trend":"STRONG BULLISH" if side=="BUY" and strong else "STRONG BEARISH" if strong else "BULLISH" if side=="BUY" else "BEARISH","signal_candle":signal_candle,"signal_candle_open":signal_candle["open"],"signal_candle_high":signal_candle["high"],"signal_candle_low":signal_candle["low"],"signal_candle_close":signal_candle["close"],"signal_candle_timestamp":signal_candle.get("timestamp"),"confirmation_candle":confirmation_candle,"confirmation_candle_timestamp":confirmation_candle.get("timestamp"),"chandelier_signal_level":entry_state.get("chandelier_level"),"hard_invalidation_level":hard_invalidation,"chandelier_entry_state":entry_state,"entry_confirmed":True,"requires_entry_confirmation":False,"entry_trigger_status":"CONFIRMED","entry_confirmation_reason":entry_state.get("reason"),"expected_hold":"25-30 MIN / 30-60 MIN / 1-2 HOURS","provider":TradingViewBridgeProvider.name,"market_category":"MCX" if mapping.get("exchange")=="MCX" else "NSE F&O","segment":mapping.get("segment"),"instrument_type":mapping.get("instrument_type"),"valid_until":(datetime.now(timezone.utc)+timedelta(minutes=18)).isoformat()}
     from signal_memory import signal_exists,add_signal
     if signal_exists(internal):return {"decision":"WAIT","reason":"duplicate_signal"}
     sender=__import__('telegram_service').send_buy_signal if side=="BUY" else __import__('telegram_service').send_sell_signal

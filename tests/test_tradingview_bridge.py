@@ -98,10 +98,10 @@ class DecisionTests(unittest.IsolatedAsyncioTestCase):
         import tradingview_bridge as bridge
         with patch("signal_memory.signal_exists",return_value=False),patch("signal_memory.add_signal"),patch("trade_monitor.add_trade"),patch("telegram_service.send_buy_signal",new=AsyncMock(return_value=True)),patch("telegram_service.send_sell_signal",new=AsyncMock(return_value=True)):
             return await bridge.process_accepted_payload(object(),parse_payload(raw(5,event="trigger",side=side,price=cache.latest(SYMBOL,5)["close"])))
-    async def test_strong_buy(self):self.assertEqual((await self.decision("BUY",True))["decision"],"STRONG BUY")
-    async def test_buy(self):self.assertEqual((await self.decision("BUY",False))["decision"],"BUY")
-    async def test_strong_sell(self):self.assertEqual((await self.decision("SELL",True))["decision"],"STRONG SELL")
-    async def test_sell(self):self.assertEqual((await self.decision("SELL",False))["decision"],"SELL")
+    async def test_strong_buy(self):self.assertEqual((await self.decision("BUY",True))["decision"],"WAIT")
+    async def test_buy(self):self.assertEqual((await self.decision("BUY",False))["decision"],"WAIT")
+    async def test_strong_sell(self):self.assertEqual((await self.decision("SELL",True))["decision"],"WAIT")
+    async def test_sell(self):self.assertEqual((await self.decision("SELL",False))["decision"],"WAIT")
     async def test_entry_missed_wait(self):self.assertEqual((await self.decision("BUY",True,True))["decision"],"WAIT")
     async def test_safe_test_event_never_trades(self):
         import tradingview_bridge as bridge
@@ -158,14 +158,34 @@ class ContractRiskLifecycleTests(unittest.TestCase):
     def test_banknifty_prediction(self):self.assertEqual(self._prediction_ready("TEST:BANKNIFTYCURRENT","BANKNIFTY FUT")["status"],"READY")
     def test_telegram_signal_is_compact_and_private(self):
         from telegram_service import _signal_text
-        text=_signal_text({"symbol":"MCX GOLD","decision":"STRONG BUY","entry":100,"sl":98,"target1":103,"target2":105,"target3":108,"trend":"STRONG BULLISH","valid_until":datetime.now(timezone.utc).isoformat(),"provider":"tradingview_alert_bridge"},"BUY")
-        for expected in ("MCX GOLD","STRONG BUY","Entry Price","Stop Loss","Target 1","Target 2","Target 3","STRONG BULLISH"):self.assertIn(expected,text)
-        self.assertNotIn("tradingview",text.lower());self.assertNotIn("₹0.00",text)
+        text=_signal_text({"market_category":"MCX","symbol":"MCX GOLD","trading_symbol":"GOLDV2026","price":100,"entry":100,"entry_zone":[99.5,100.5],"sl":98,"target1":103,"target2":105,"target3":108,"score":84,"risk_level":"MEDIUM","trend":"STRONG BULLISH","signal_candle_high":101,"signal_candle_low":97.5,"confirmation_candle":{"timestamp":datetime.now(timezone.utc)},"volume":1200,"open_interest":5000,"risk_reward":2.5,"provider":"tradingview_alert_bridge","reasons":["Chandelier BUY","Next candle confirmed","Structure supports"]},"BUY")
+        for expected in ("🔱 SHIVAY AI PRO","MARKET: MCX","MCX GOLD","CONTRACT: GOLDV2026","DIRECTION: 🟢 BUY","CURRENT PRICE","ENTRY ZONE","STOP LOSS","TARGET 1","TARGET 2","TARGET 3","84/100","MODERATE","CHANDELIER SIGNAL","SIGNAL CANDLE HIGH","SIGNAL CANDLE LOW","NEXT CANDLE + APPROX. 1 MIN CONFIRMED ✅","BULLISH","VOLUME","OI","RISK : REWARD","EXPECTED HOLD","TOP REASONS"):self.assertIn(expected,text)
+        self.assertNotIn("SOURCE:",text.upper());self.assertNotIn("PROVIDER:",text.upper())
+        self.assertNotIn("tradingview",text.lower());self.assertNotIn("₹0.00",text);self.assertFalse(text.startswith("??"))
+    def test_simulated_sell_formatter_has_all_safe_fields(self):
+        from telegram_service import _signal_text
+        text=_signal_text({"market_category":"NSE F&O","symbol":"NIFTY","trading_symbol":"NIFTY26AUGFUT","price":24700,"entry":24695,"entry_zone":[24690,24700],"sl":24750,"target1":24620,"target2":24550,"target3":24480,"score":81,"risk_level":"LOW","trend":"BEARISH","signal_candle_high":24750,"signal_candle_low":24680,"confirmation_candle":{"timestamp":datetime.now(timezone.utc)},"volume":150000,"open_interest":480000,"risk_reward":2.6,"provider":"hidden","source":"hidden","reasons":["Chandelier SELL","Next candle confirmed","Risk checks passed"]},"SELL")
+        for expected in ("🔱 SHIVAY AI PRO","SCRIPT: NIFTY","CONTRACT: NIFTY26AUGFUT","DIRECTION: 🔴 SELL","CURRENT PRICE:","ENTRY ZONE:","STOP LOSS:","TARGET 1:","TARGET 2:","TARGET 3:","81/100","SAFE","CHANDELIER SIGNAL:\nSELL","NEXT CANDLE + APPROX. 1 MIN CONFIRMED ✅"):
+            self.assertIn(expected,text)
+        for forbidden in ("SOURCE:","PROVIDER:","HIDDEN","??","₹0.00"):
+            self.assertNotIn(forbidden,text.upper())
+
     def test_provider_priority(self):
         from provider_manager import ProviderManager
         self.assertEqual(ProviderManager.DEFAULT_PRIORITY[0],"tradingview_alert_bridge");self.assertEqual(ProviderManager.DEFAULT_PRIORITY[-1],"yahoo_emergency")
     def test_no_order_surface(self):
         from tradingview_bridge import TradingViewBridgeProvider
         provider=TradingViewBridgeProvider();self.assertFalse(any(hasattr(provider,x) for x in ("place_order","modify_order","cancel_order")))
+
+class UnicodeTransmissionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shivay_unicode_survives_transmission_preparation(self):
+        import telegram_service
+        captured=[]
+        class Bot:
+            async def send_message(self,chat_id,text):captured.append(text)
+        class App:bot=Bot()
+        with patch("telegram_service.recipients",return_value=[{"id":1}]):
+            sent=await telegram_service._send(App(),("UNICODE",id(self)),"🔱 SHIVAY AI PRO\n\nWAIT")
+        self.assertTrue(sent);self.assertEqual(captured,["🔱 SHIVAY AI PRO\n\nWAIT"]);self.assertFalse(captured[0].startswith("??"))
 
 if __name__=="__main__":unittest.main()

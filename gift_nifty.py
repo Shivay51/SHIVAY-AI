@@ -32,6 +32,17 @@ _gift_nifty_symbols = (
 
 
 def _load_gift_nifty_data():
+    try:
+        from tvkit_provider import TVKitProvider
+        candles = TVKitProvider().get_historical_candles("GIFT NIFTY", "5m", 5)
+        if len(candles) >= 200:
+            frame = pd.DataFrame({
+                "High": [row["high"] for row in candles], "Low": [row["low"] for row in candles],
+                "Close": [row["close"] for row in candles], "Volume": [row["volume"] for row in candles],
+            }, index=[row["timestamp"] for row in candles])
+            return "NSEIX:NIFTY1!", frame
+    except Exception:
+        pass
     for symbol in _gift_nifty_symbols:
         try:
             data = yf.download(

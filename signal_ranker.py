@@ -38,7 +38,9 @@ def rank_trade(signal):
     mtf = timeframes[0] == expected and timeframes[1] == expected and timeframes[2] == expected and timeframes[3] in {expected, "SIDEWAYS"}
     context_checks = signal.get("market_brain", {}).get("checks", {}) if isinstance(signal.get("market_brain"), Mapping) else {}
     critical_ok = bool(context_checks) and all(bool(value) for value in context_checks.values())
-    valid = bool(side and score >= max(72, int(MIN_SCORE)) and confidence >= 72 and adx_value >= 22 and rr >= float(MIN_RISK_REWARD) and bool(signal.get("volume_spike")) and bool(signal.get("entry_validity", {}).get("valid", True)) and context >= 75 and critical_ok and mtf)
+    chandelier = signal.get("chandelier_entry_state", {}) if isinstance(signal.get("chandelier_entry_state"), Mapping) else {}
+    chandelier_ok = bool(chandelier.get("confirmed") and chandelier.get("status") == "CONFIRMED" and chandelier.get("side") == side)
+    valid = bool(side and chandelier_ok and score >= max(70, int(MIN_SCORE)) and confidence >= 70 and adx_value >= 22 and rr >= float(MIN_RISK_REWARD) and bool(signal.get("volume_spike")) and bool(signal.get("entry_validity", {}).get("valid", True)) and context >= 75 and critical_ok and mtf)
     quality = int(min(100, round(score * .30 + confidence * .22 + context * .20 + min(100, adx_value * 2.5) * .10 + min(100, rr * 25) * .10 + _num(signal.get("sector_priority", 50)) * .04 + min(100, _num(signal.get("relative_volume")) * 50) * .04))) if valid else 0
     grade = "A+" if quality >= 90 else "A" if quality >= 84 else "B+" if quality >= 78 else "C"
     valid = valid and grade != "C"

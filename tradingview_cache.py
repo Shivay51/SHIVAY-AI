@@ -109,11 +109,15 @@ class TradingViewCache:
         chandelier = calculate_chandelier_exit(
             [row["high"] for row in bars], [row["low"] for row in bars], [row["close"] for row in bars]
         )
+        previous_chandelier = calculate_chandelier_exit(
+            [row["high"] for row in list(bars)[:-1]], [row["low"] for row in list(bars)[:-1]], [row["close"] for row in list(bars)[:-1]]
+        ) if len(bars) > 1 else {"valid": False}
         latest.update(
             chandelier_long_stop=chandelier.get("long_stop") or latest.get("chandelier_long_stop", 0.0),
             chandelier_short_stop=chandelier.get("short_stop") or latest.get("chandelier_short_stop", 0.0),
             chandelier_direction=chandelier.get("trend") if chandelier.get("valid") else latest.get("chandelier_direction", "SIDEWAYS"),
-            chandelier_direction_changed=bool(chandelier.get("stop_changed", False)),
+            chandelier_direction_changed=bool(chandelier.get("valid") and previous_chandelier.get("valid")
+                                               and chandelier.get("direction") != previous_chandelier.get("direction")),
         )
         if latest.get("source") in {"TRADINGVIEW_STANDARD_ALERT", "TRADINGVIEW_STANDARD_ALERT_BRIDGE"}:
             setup_buy = bool(snapshot.get("bullish_breakout") or snapshot.get("bullish_retest") or snapshot.get("bullish_pullback"))

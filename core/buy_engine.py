@@ -8,6 +8,10 @@ from config import MIN_SCORE
 
 def check_buy(score_data):
 
+    chandelier = score_data.get("chandelier_entry_state", {})
+    if not isinstance(chandelier, dict) or not chandelier.get("confirmed") or chandelier.get("side") != "BUY":
+        return False
+
     # ==========================================
     # Market Regime
     # ==========================================

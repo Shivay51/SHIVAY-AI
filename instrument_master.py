@@ -12,9 +12,11 @@ def _trial_master_providers() -> list[Any]:
     global _TRIAL_MASTER_PROVIDERS
     with _LOCK:
         if _TRIAL_MASTER_PROVIDERS is None:
+            from groww_provider import GrowwProvider
+            from upstox_provider import UpstoxProvider
             from truedata_provider import TrueDataProvider
             from gdfl_provider import GDFLProvider
-            _TRIAL_MASTER_PROVIDERS = [TrueDataProvider(), GDFLProvider()]
+            _TRIAL_MASTER_PROVIDERS = [GrowwProvider(), UpstoxProvider(), TrueDataProvider(), GDFLProvider()]
         return _TRIAL_MASTER_PROVIDERS
 
 

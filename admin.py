@@ -510,12 +510,21 @@ async def notify_admins(application: Any, message: str | None = None) -> int:
         else:
             messages = [str(message)]
     delivered = 0
+    header = "🔐 SHIVAY AI ADMIN"
     for text in messages:
         safe_text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", "[REDACTED]", text)
         safe_text = re.sub(r"[\r\n]{3,}", "\n\n", safe_text).strip()[:3500]
+        if safe_text.startswith(header):
+            payload = safe_text
+        elif safe_text.startswith("SHIVAY AI ADMIN"):
+            payload = f"{header}\n\n{safe_text[len('SHIVAY AI ADMIN'):].lstrip()}"
+        elif safe_text:
+            payload = f"{header}\n\n{safe_text}"
+        else:
+            payload = header
         for admin_id in sorted(_admin_ids()):
             try:
-                await application.bot.send_message(chat_id=admin_id, text="🔐 SHIVAY AI ADMIN\n\n" + safe_text)
+                await application.bot.send_message(chat_id=admin_id, text=payload)
                 delivered += 1
             except asyncio.CancelledError:
                 raise

@@ -4,6 +4,10 @@ from config import MIN_SCORE, MIN_RISK_REWARD
 
 def analyze_trade(symbol, score_data):
     side = get_decision(score_data)
+    chandelier_entry = score_data.get("chandelier_entry_state", {})
+    if (not isinstance(chandelier_entry, dict) or not chandelier_entry.get("confirmed")
+            or chandelier_entry.get("side") != side):
+        side = "HOLD"
 
     score = int(score_data.get("score", 0))
     price = float(score_data.get("price", 0))

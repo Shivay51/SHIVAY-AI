@@ -18,7 +18,6 @@ from strategy import analyze_trade
 from tradeplan import create_trade_plan
 from entry_validity import evaluate_entry_validity
 from trade_journal import record_rejection
-from chandelier_exit import get_completed_signal_candle
 
 from config import MAX_TRADES
 
@@ -77,13 +76,30 @@ def scan_market():
             )
 
             side = "BUY" if "BUY" in trade["decision"] else "SELL"
+            chandelier_entry = score_data.get("chandelier_entry_state")
+            if (not isinstance(chandelier_entry, dict) or not chandelier_entry.get("confirmed")
+                    or chandelier_entry.get("side") != side):
+                record_rejection(symbol, ["chandelier_primary_confirmation_missing"], {"side": side})
+                continue
+            signal_candle = chandelier_entry.get("signal_candle")
+            confirmation_candle = chandelier_entry.get("confirmation_candle")
+            if not isinstance(signal_candle, dict) or not isinstance(confirmation_candle, dict):
+                record_rejection(symbol, ["missing_chandelier_signal_or_confirmation_candle"], {"side": side})
+                continue
+            hard_invalidation = float(signal_candle["low"] if side == "BUY" else signal_candle["high"])
+            if side == "BUY":
+                plan["sl"] = round(max(float(plan["sl"]), hard_invalidation), 2)
+                if plan["sl"] >= float(plan["entry"]):
+                    record_rejection(symbol, ["invalid_buy_signal_candle_invalidation"], {"side": side})
+                    continue
+            else:
+                plan["sl"] = round(min(float(plan["sl"]), hard_invalidation), 2)
+                if plan["sl"] <= float(plan["entry"]):
+                    record_rejection(symbol, ["invalid_sell_signal_candle_invalidation"], {"side": side})
+                    continue
             validity = evaluate_entry_validity(market, side, plan, score_data)
             if not validity["valid"]:
                 record_rejection(symbol, validity["reasons"], {"side": side, "setup": score_data.get("setup"), "provider": market.get("provider"), "delay_seconds": quality.get("delay_seconds")})
-                continue
-            signal_candle = get_completed_signal_candle(market, 15)
-            if signal_candle is None:
-                record_rejection(symbol, ["missing_completed_signal_candle"], {"side": side})
                 continue
 
             results.append({
@@ -175,6 +191,7 @@ def scan_market():
                 "data_quality": market.get("data_quality", quality),
 
                 "instrument_type": market.get("instrument_type", "UNKNOWN"),
+                "trading_symbol": market.get("trading_symbol", symbol),
 
                 "market_category": "MCX" if market.get("segment") == "MCX_COMM" else "NSE F&O",
 
@@ -213,17 +230,25 @@ def scan_market():
                 "entry_validity": validity,
 
                 "market_data": market,
-                "entry_confirmed": False,
-                "requires_entry_confirmation": True,
+                "entry_confirmed": True,
+                "requires_entry_confirmation": False,
                 "signal_candle": signal_candle,
                 "signal_candle_high": signal_candle["high"],
                 "signal_candle_low": signal_candle["low"],
                 "signal_candle_close": signal_candle["close"],
                 "signal_candle_timestamp": signal_candle.get("timestamp"),
-                "entry_trigger_status": "PENDING",
+                "signal_candle_open": signal_candle["open"],
+                "chandelier_signal_level": chandelier_entry.get("chandelier_level"),
+                "confirmation_candle": confirmation_candle,
+                "confirmation_candle_timestamp": confirmation_candle.get("timestamp"),
+                "entry_trigger_status": "CONFIRMED",
+                "entry_confirmation_reason": chandelier_entry.get("reason"),
+                "hard_invalidation_level": hard_invalidation,
+                "expected_hold": "25-30 MIN / 30-60 MIN / 1-2 HOURS",
                 "chandelier_15m": score_data.get("chandelier_15m"),
                 "chandelier_30m": score_data.get("chandelier_30m"),
                 "chandelier_60m": score_data.get("chandelier_60m"),
+                "chandelier_entry_state": chandelier_entry,
 
             })
 

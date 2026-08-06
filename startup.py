@@ -577,7 +577,7 @@ def _initialize_command_handlers(application: Any) -> None:
         "prediction": "prediction", "buy": "buy", "sell": "sell", "trades": "trades",
         "open": "open", "closed": "closed", "report": "report",
         "performance": "performance", "gold": "gold", "silver": "silver",
-        "ping": "ping", "version": "version", "startbot": "startbot",
+        "datastatus": "datastatus", "ping": "ping", "version": "version", "startbot": "startbot",
         "stopbot": "stopbot", "restart": "restart",
         "marketdetails": "marketdetails", "predictiondetails": "predictiondetails",
         "golddetails": "golddetails", "silverdetails": "silverdetails",

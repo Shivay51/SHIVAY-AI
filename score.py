@@ -4,7 +4,7 @@ from indicators import adx, atr, ema20, ema50, ema200, macd, supertrend, volume_
 from rsi import calculate_rsi
 from support_resistance import support_resistance
 from multitimeframe import analyze_timeframes
-from chandelier_exit import calculate_timeframe_chandelier, is_chandelier_buy_confirmed, is_chandelier_sell_confirmed
+from chandelier_exit import calculate_timeframe_chandelier, evaluate_chandelier_entry_state
 
 
 def _higher_timeframe_direction(close, factor):
@@ -95,6 +95,7 @@ def calculate_score(market):
     chandelier_15m = calculate_timeframe_chandelier(market, 15)
     chandelier_30m = calculate_timeframe_chandelier(market, 30)
     chandelier_60m = calculate_timeframe_chandelier(market, 60)
+    chandelier_entry = evaluate_chandelier_entry_state(market, 15)
     chandelier_buy_distance = ((price - float(chandelier_15m.get("long_stop") or 0)) / atr_value) if atr_value > 0 and chandelier_15m.get("long_stop") else 99.0
     chandelier_sell_distance = ((float(chandelier_15m.get("short_stop") or 0) - price) / atr_value) if atr_value > 0 and chandelier_15m.get("short_stop") else 99.0
     direction_30m = timeframes["30m"]
@@ -122,9 +123,13 @@ def calculate_score(market):
     else:
         regime = "🟡 SIDEWAYS"
 
-    side = "BUY" if buy_score > sell_score else "SELL" if sell_score > buy_score else "NO TRADE"
-    score = max(0, min(100, int(round(max(buy_score, sell_score)))))
-    if side == "NO TRADE" or adx_value < 18 or not (bullish or bearish):
+    side = str(chandelier_entry.get("side") or "NO TRADE") if chandelier_entry.get("confirmed") else "NO TRADE"
+    directional_score = buy_score if side == "BUY" else sell_score if side == "SELL" else max(buy_score, sell_score)
+    opposite_score = sell_score if side == "BUY" else buy_score if side == "SELL" else 0
+    if side in {"BUY", "SELL"} and opposite_score > directional_score:
+        directional_score -= min(20, int((opposite_score - directional_score) / 2) + 5)
+    score = max(0, min(100, int(round(directional_score))))
+    if side == "NO TRADE" or adx_value < 18:
         score = min(score, 69)
 
     return {
@@ -141,7 +146,9 @@ def calculate_score(market):
         "timeframe_aligned": timeframes["aligned"], "entry_timing_confirmed": timeframes["entry_timing"],
         "chandelier_15m": chandelier_15m, "chandelier_30m": chandelier_30m,
         "chandelier_60m": chandelier_60m,
-        "chandelier_buy_confirmed": is_chandelier_buy_confirmed(chandelier_15m) and chandelier_30m.get("trend") == "BULLISH" and 0 <= chandelier_buy_distance <= 3.75,
-        "chandelier_sell_confirmed": is_chandelier_sell_confirmed(chandelier_15m) and chandelier_30m.get("trend") == "BEARISH" and 0 <= chandelier_sell_distance <= 3.75,
+        "chandelier_entry_state": chandelier_entry,
+        "chandelier_primary_side": chandelier_entry.get("side"),
+        "chandelier_buy_confirmed": bool(chandelier_entry.get("confirmed") and chandelier_entry.get("side") == "BUY" and 0 <= chandelier_buy_distance <= 3.75),
+        "chandelier_sell_confirmed": bool(chandelier_entry.get("confirmed") and chandelier_entry.get("side") == "SELL" and 0 <= chandelier_sell_distance <= 3.75),
         "chandelier_distance_atr": round(chandelier_buy_distance if side == "BUY" else chandelier_sell_distance, 2),
     }
