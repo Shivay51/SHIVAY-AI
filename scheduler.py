@@ -75,7 +75,7 @@ LATE_EVENING_TIME = _clock("LATE_EVENING_UPDATE", 19, 30)
 LATE_NIGHT_TIME = _clock("LATE_NIGHT_UPDATE", 23, 0)
 OUTLOOK_EVENING_TIME = _clock("NEXT_SESSION_EVENING", 22, 0)
 OUTLOOK_OVERNIGHT_TIME = _clock("NEXT_SESSION_OVERNIGHT", 1, 0)
-OUTLOOK_PREOPEN_TIME = _clock("NEXT_SESSION_PREOPEN", 8, 0)
+OUTLOOK_PREOPEN_TIME = _clock("NEXT_SESSION_PREOPEN", 9, 5)
 SCAN_SECONDS = max(60, int(_cfg("SCAN_INTERVAL", 300)))
 MONITOR_SECONDS = max(15, int(_cfg("TRADE_MONITOR_INTERVAL", 30)))
 CACHE_SECONDS = max(180, int(_cfg("CACHE_TIME", 300)))
@@ -424,6 +424,8 @@ async def _next_session_outlook_job(app: Any, label: str) -> None:
         outlook = importlib.import_module("index_outlook")
         report = await _safe_call(label, lambda: outlook.generate_market_outlook(force_refresh=True))
         if report:
+            report = report.copy()
+            report["stage"] = label
             text = await _safe_call("format next-session outlook", outlook.format_market_outlook, report)
             if text:
                 await send_all(app, text)
@@ -442,7 +444,7 @@ def _startup_completed(now: datetime) -> set[tuple[str, date]]:
         "morning": PREOPEN_TIME, "eod": EOD_TIME, "overnight": OVERNIGHT_TIME,
         "late_evening": LATE_EVENING_TIME, "late_night": LATE_NIGHT_TIME,
         "outlook_2200": OUTLOOK_EVENING_TIME, "outlook_0100": OUTLOOK_OVERNIGHT_TIME,
-        "outlook_0800": OUTLOOK_PREOPEN_TIME,
+        "outlook_0905": OUTLOOK_PREOPEN_TIME,
     }
     return {(name, now.date()) for name, scheduled in slots.items() if now.time() >= scheduled}
 
@@ -481,7 +483,7 @@ async def scheduler(application: Any) -> None:
 
             for outlook_name, outlook_time, outlook_label in (
                 ("outlook_0100", OUTLOOK_OVERNIGHT_TIME, "01:00 IST OVERNIGHT UPDATE"),
-                ("outlook_0800", OUTLOOK_PREOPEN_TIME, "08:00 IST FINAL PRE-MARKET UPDATE"),
+                ("outlook_0905", OUTLOOK_PREOPEN_TIME, "FINAL PRE-MARKET"),
                 ("outlook_2200", OUTLOOK_EVENING_TIME, "22:00 IST EVENING UPDATE"),
             ):
                 if _due(now, outlook_time, completed, outlook_name):

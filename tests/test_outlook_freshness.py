@@ -41,8 +41,8 @@ class OutlookFreshnessTests(unittest.TestCase):
                   "banknifty_bias": "SIDEWAYS", "bull_probability": 40,
                   "bear_probability": 60, "decision": "MILD BEARISH"}
         text = format_market_outlook(report)
-        self.assertTrue(text.startswith("🔱 SHIVAY AI PRO\n📊 MARKET OUTLOOK"))
-        for required in ("GIFT NIFTY", "DOW", "S&P 500", "NASDAQ", "S1:", "R2:", "BULL: 40%", "BEAR: 60%", "DECISION:"):
+        self.assertTrue(text.startswith("🔱 SHIVAY AI PRO\n━━━━━━━━━━━━━━━━\n📊 PRE-MARKET"))
+        for required in ("GIFT NIFTY", "DOW", "S&P 500", "NASDAQ", "S1 │", "R2 │", "BULL 40%", "BEAR 60%", "DECISION:"):
             self.assertIn(required, text)
         for forbidden in ("source", "provider", "api", "tradingview", "disclaimer"):
             self.assertNotIn(forbidden, text.lower())
