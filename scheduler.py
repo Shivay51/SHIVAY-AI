@@ -419,26 +419,16 @@ async def _late_update_job(app: Any, label: str) -> None:
 
 
 async def _next_session_outlook_job(app: Any, label: str) -> None:
-    """Publish refreshed NSE, Gold and Silver probability outlooks without fabricating inputs."""
+    """Force-refresh and publish one clean next-session outlook."""
     try:
-        overnight = importlib.import_module("overnight_analysis")
-        report = await _safe_call(label, lambda: overnight.analyze_overnight(force_refresh=True))
+        outlook = importlib.import_module("index_outlook")
+        report = await _safe_call(label, lambda: outlook.generate_market_outlook(force_refresh=True))
         if report:
-            text = await _safe_call("format NSE next-session outlook", overnight.format_overnight_report, report)
+            text = await _safe_call("format next-session outlook", outlook.format_market_outlook, report)
             if text:
-                await send_all(app, f"SHIVAY NEXT SESSION OUTLOOK - NSE\n{label}\n\n{text}")
+                await send_all(app, text)
     except Exception:
-        LOGGER.exception("NSE next-session outlook recovered from a module failure")
-    for module_name, title in (("gold", "SHIVAY MCX GOLD OUTLOOK"), ("silver", "SHIVAY MCX SILVER OUTLOOK")):
-        try:
-            module = importlib.import_module(module_name)
-            analysis = await _safe_call(f"{module_name} outlook", getattr(module, f"analyze_{module_name}"), True)
-            formatter = getattr(module, f"format_{module_name}_report")
-            text = await _safe_call(f"format {module_name} outlook", formatter, analysis)
-            if text:
-                await send_all(app, f"{title}\n{label}\n\n{text}", "MCX")
-        except Exception:
-            LOGGER.exception("%s next-session outlook recovered from a module failure", module_name)
+        LOGGER.exception("Next-session outlook recovered from a module failure")
 
 
 def _due(now: datetime, scheduled: time, completed: set[tuple[str, date]], name: str) -> bool:

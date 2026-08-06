@@ -17,6 +17,8 @@ _CACHE: dict[str, Any] | None = None
 _CACHE_AT = 0.0
 IST = ZoneInfo("Asia/Kolkata")
 NEW_YORK = ZoneInfo("America/New_York")
+TOKYO = ZoneInfo("Asia/Tokyo")
+HONG_KONG = ZoneInfo("Asia/Hong_Kong")
 
 
 def _age(value: dict[str, Any] | None, now: datetime | None = None) -> float | None:
@@ -43,6 +45,17 @@ def exchange_is_open(market: str, now: datetime | None = None) -> bool:
         if weekday == 5 or (weekday == 6 and clock < wall_time(18, 0)) or (weekday == 4 and clock >= wall_time(17, 0)):
             return False
         return not (wall_time(17, 0) <= clock < wall_time(18, 0))
+    if key in {"DOW", "S&P 500", "NASDAQ"}:
+        local = instant.astimezone(NEW_YORK)
+        return local.weekday() < 5 and wall_time(9, 30) <= local.time() <= wall_time(16, 0)
+    if "NIKKEI" in key:
+        local = instant.astimezone(TOKYO)
+        return local.weekday() < 5 and wall_time(9, 0) <= local.time() <= wall_time(15, 30)
+    if "HANG SENG" in key:
+        local = instant.astimezone(HONG_KONG)
+        return local.weekday() < 5 and wall_time(9, 30) <= local.time() <= wall_time(16, 0)
+    if key in {"DXY", "USDINR"}:
+        return instant.astimezone(NEW_YORK).weekday() < 5
     local = instant.astimezone(IST)
     if local.weekday() >= 5:
         return False
