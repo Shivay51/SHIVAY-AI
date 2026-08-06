@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
+import requests
 
 from index_outlook import rank_confluence_levels, recalculate_post_open_levels, sanity_check_outlook
-from moneycontrol_outlook import parse_market_table, parse_next_data, parse_stock_snapshot
+from moneycontrol_outlook import MoneycontrolOutlookClient, parse_market_table, parse_next_data, parse_stock_snapshot
 
 
 def next_html(stock: dict) -> str:
@@ -65,6 +68,24 @@ class MoneycontrolOutlookTests(unittest.TestCase):
         valid, errors = sanity_check_outlook(report)
         self.assertFalse(valid)
         self.assertTrue(any("GIFT NIFTY" in error for error in errors))
+
+    def test_rendered_public_dom_recovers_direct_http_failure(self):
+        rows = {"GIFT NIFTY": self.gift}
+        for name, price, change, previous in (("DOW", 53905.36, -443.76, 54349.12),
+                                               ("S&P 500", 7711.60, -11.95, 7723.55),
+                                               ("NASDAQ", 26348.35, -15.09, 26363.44)):
+            rows[name] = {"current_price": price, "prev_close": previous, "net_change": change,
+                          "percent_change": round(change / previous * 100, 2),
+                          "lastupd_epoch": int(self.now.timestamp() * 1000), "market_state": "CLOSED"}
+        client = MoneycontrolOutlookClient(timeout=1)
+        try:
+            with patch.object(client, "_get", side_effect=requests.HTTPError("blocked")), \
+                    patch("moneycontrol_outlook._rendered_next_data", return_value=rows):
+                snapshot = client.get_snapshot(force_refresh=True)
+        finally:
+            client.close()
+        self.assertTrue(snapshot["valid"])
+        self.assertEqual(snapshot["inputs"]["GIFT NIFTY"]["change"], -93.5)
 
 
 if __name__ == "__main__":

@@ -6,8 +6,14 @@ values may influence an outlook, but must never be used for entries or orders.
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
 import re
+import shutil
+import socket
+import subprocess
+import tempfile
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -17,10 +23,12 @@ from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
 import requests
+import websocket
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 IST = ZoneInfo("Asia/Kolkata")
+LOGGER = logging.getLogger("shivay.moneycontrol.outlook")
 INDIA_URL = "https://www.moneycontrol.com/stocksmarketsindia/"
 GIFT_URL = "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in%3Bgsx"
 INDEX_URLS = {
@@ -32,6 +40,108 @@ CORE_NAMES = ("GIFT NIFTY", "DOW", "S&P 500", "NASDAQ")
 _CACHE_LOCK = threading.RLock()
 _CACHE: dict[str, Any] | None = None
 _CACHE_AT = 0.0
+
+
+def _chrome_path() -> str | None:
+    configured = os.getenv("CHROME_EXECUTABLE", "").strip()
+    candidates = [configured,
+                  r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                  r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                  r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+                  r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"]
+    return next((value for value in candidates if value and os.path.isfile(value)), None)
+
+
+def _free_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def _rendered_next_data(urls: Mapping[str, str], timeout: float = 25.0) -> dict[str, Mapping[str, Any]]:
+    """Read public rendered DOM through an installed browser, without login or bypass."""
+    executable = _chrome_path()
+    if not executable:
+        return {}
+    port = _free_local_port()
+    profile = tempfile.mkdtemp(prefix="shivay_mc_")
+    startup = None
+    creation_flags = 0
+    if os.name == "nt":
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = 0
+        creation_flags = subprocess.CREATE_NO_WINDOW
+    command = [executable, f"--remote-debugging-port={port}", "--remote-allow-origins=*",
+               "--disable-background-mode", "--disable-component-update", "--no-first-run",
+               "--no-default-browser-check", f"--user-data-dir={profile}", *urls.values()]
+    process: subprocess.Popen[bytes] | None = None
+    connections: list[Any] = []
+    result: dict[str, Mapping[str, Any]] = {}
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   startupinfo=startup, creationflags=creation_flags)
+        deadline = time.monotonic() + timeout
+        tabs: list[dict[str, Any]] = []
+        while time.monotonic() < deadline:
+            try:
+                response = requests.get(f"http://127.0.0.1:{port}/json", timeout=1)
+                response.raise_for_status()
+                tabs = [dict(item) for item in response.json() if isinstance(item, Mapping)]
+                if all(any(target.split("?", 1)[0] in str(tab.get("url", "")) for tab in tabs)
+                       for target in urls.values()):
+                    break
+            except (requests.RequestException, TypeError, ValueError):
+                pass
+            time.sleep(0.25)
+        for name, target in urls.items():
+            tab = next((item for item in tabs if target.split("?", 1)[0] in str(item.get("url", ""))), None)
+            if not tab or not tab.get("webSocketDebuggerUrl"):
+                continue
+            connection = websocket.create_connection(str(tab["webSocketDebuggerUrl"]), timeout=5)
+            connections.append(connection)
+            request_id = 1
+            value = ""
+            while time.monotonic() < deadline and not value:
+                connection.send(json.dumps({"id": request_id, "method": "Runtime.evaluate",
+                                            "params": {"expression": "document.querySelector('#__NEXT_DATA__')?.textContent || ''",
+                                                       "returnByValue": True}}))
+                while True:
+                    message = json.loads(connection.recv())
+                    if message.get("id") == request_id:
+                        value = str((((message.get("result") or {}).get("result") or {}).get("value") or ""))
+                        break
+                request_id += 1
+                if not value:
+                    time.sleep(0.25)
+            if value:
+                result[name] = parse_next_data(f'<script id="__NEXT_DATA__">{value}</script>')
+        if connections:
+            try:
+                connections[0].send(json.dumps({"id": 99999, "method": "Browser.close"}))
+            except Exception:
+                pass
+    except (OSError, subprocess.SubprocessError, requests.RequestException, websocket.WebSocketException,
+            TypeError, ValueError, json.JSONDecodeError):
+        LOGGER.warning("Public rendered market page unavailable", exc_info=True)
+    finally:
+        for connection in connections:
+            try:
+                connection.close()
+            except Exception:
+                pass
+        if process is not None:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+        for _ in range(4):
+            try:
+                shutil.rmtree(profile)
+                break
+            except OSError:
+                time.sleep(0.25)
+    return result
 
 
 def _number(value: Any) -> float | None:
@@ -196,6 +306,15 @@ class MoneycontrolOutlookClient:
                 values[name] = parse_stock_snapshot(name, parse_next_data(self._get(url)), fetched)
             except (requests.RequestException, ValueError, TypeError, json.JSONDecodeError) as error:
                 failures[name] = type(error).__name__
+        missing = {name: (GIFT_URL if name == "GIFT NIFTY" else INDEX_URLS[name])
+                   for name in CORE_NAMES if not values.get(name, {}).get("validated")}
+        if missing:
+            rendered = _rendered_next_data(missing, timeout=max(20.0, self.timeout + 10.0))
+            for name, stock in rendered.items():
+                item = parse_stock_snapshot(name, stock, fetched)
+                if item.get("validated"):
+                    values[name] = item
+                    failures.pop(name, None)
         for name in CORE_NAMES:
             values.setdefault(name, {"name": name, "available": False, "validated": False,
                                      "freshness": "UNAVAILABLE", "direction_usable": False,
