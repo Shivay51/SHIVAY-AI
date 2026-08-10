@@ -8,7 +8,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import Application, ContextTypes
+from telegram.ext import Application, ContextTypes, InlineQueryHandler
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env", override=False)
@@ -18,6 +18,7 @@ import auto_recovery
 import cleanup
 import config
 import startup as lifecycle
+from fno_search import answer_inline_query
 
 LOGGER = logging.getLogger("shivay.bot")
 TOKEN_PATTERN = re.compile(r"\d{6,}:[A-Za-z0-9_-]{20,}")
@@ -45,7 +46,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def on_startup(application: Application) -> None:
-    """Initialize supervised services and send exactly one admin startup card."""
     try:
         state = await lifecycle.startup(application)
         await auto_recovery.start_auto_recovery(application)
@@ -55,22 +55,9 @@ async def on_startup(application: Application) -> None:
         check = await startup_self_check()
         application.bot_data["tradingview_webhook_health"] = check
         application.bot_data["shivay_enabled"] = True
-        LOGGER.info(
-            "Webhook self-check: server=%s health=%s enabled=%s token=%s symbols=%s signals_only=%s",
-            check["server_running"], check["local_health"], check["webhook_enabled"], check["token_configured"],
-            check["enabled_symbols"], check["signals_only"],
-        )
         try:
             import admin
-            await admin.notify_admins(
-                application,
-                "🔱 SHIVAY AI PRO\n"
-                "✅ BOT ACTIVE\n"
-                "📡 DATA ENGINE: ACTIVE\n"
-                "📊 SCANNER: ACTIVE\n"
-                "⏱ SCHEDULER: ACTIVE\n"
-                "🎯 MODE: SIGNALS ONLY",
-            )
+            await admin.notify_admins(application, "🔱 SHIVAY AI PRO\n✅ BOT ACTIVE\n🎯 MODE: SIGNALS ONLY")
         except Exception:
             LOGGER.warning("Startup admin notification was not delivered")
         LOGGER.info("SHIVAY AI startup completed: %s", state.get("state", "READY"))
@@ -93,6 +80,7 @@ async def on_shutdown(application: Application) -> None:
 
 def build_application(token: str | None = None) -> Application:
     application = Application.builder().token(token or _load_token()).post_init(on_startup).post_shutdown(on_shutdown).build()
+    application.add_handler(InlineQueryHandler(answer_inline_query))
     application.add_error_handler(error_handler)
     return application
 
@@ -106,14 +94,8 @@ def run_bot() -> None:
         raise RuntimeError("Unsafe execution configuration rejected: SHIVAY AI must run signals-only")
     app_logging.setup_logging()
     app = build_application()
-    LOGGER.info("Starting SHIVAY AI Telegram polling")
     try:
         app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
-    except KeyboardInterrupt:
-        LOGGER.info("Shutdown requested from the console")
-    except Exception:
-        LOGGER.exception("Telegram polling stopped unexpectedly")
-        raise
     finally:
         app_logging.shutdown_logging()
 
@@ -124,6 +106,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-__all__ = ["app", "build_application", "run_bot", "main", "on_startup", "on_shutdown", "error_handler"]
