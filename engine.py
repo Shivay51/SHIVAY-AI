@@ -9,7 +9,6 @@ from pullback import pullback_filter
 from score import calculate_score
 from market_brain import assess_signal_context
 
-
 LOGGER = logging.getLogger("shivay.engine")
 
 
@@ -22,7 +21,7 @@ def run_engine(market):
         high = [float(value) for value in market.get("high", [])]
         low = [float(value) for value in market.get("low", [])]
         volume = [float(value) for value in market.get("volume", [])]
-        if price < 200 or min(map(len, (close, high, low, volume))) < 200:
+        if price < 100 or min(map(len, (close, high, low, volume))) < 200:
             return None
 
         score_data = calculate_score(market)
@@ -59,13 +58,7 @@ def run_engine(market):
         confirmation_30 = str(score_data.get("timeframe_30m", "UNKNOWN"))
         confirmation_60 = str(score_data.get("timeframe_60m", "UNKNOWN"))
         expected = "BULLISH" if side == "BUY" else "BEARISH"
-        technical = (
-            technical
-            and confirmation_60 == expected
-            and confirmation_30 == expected
-            and confirmation_15 == expected
-            and confirmation_5 in {expected, "SIDEWAYS"}
-        )
+        technical = technical and confirmation_60 == expected and confirmation_30 == expected and confirmation_15 == expected and confirmation_5 in {expected, "SIDEWAYS"}
         if not technical:
             return None
 
