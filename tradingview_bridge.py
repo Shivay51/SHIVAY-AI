@@ -12,6 +12,17 @@ from tradingview_payload import TradingViewPayload
 from chandelier_exit import evaluate_chandelier_entry_state
 
 LOGGER=logging.getLogger("shivay.tradingview.bridge");ROOT=Path(__file__).resolve().parent
+ALLOWED_TIMEFRAMES={5,15,30,60}
+
+
+def assert_single_provider_dataset(value:Mapping[str,Any])->str:
+    """Reject any snapshot whose candles come from more than one provider."""
+    sources={str(row.get("provider") or row.get("source") or value.get("provider") or "").strip().lower() for row in (value.get("candles") or [])}
+    sources.discard("")
+    if len(sources)>1:raise ProviderUnavailable("mixed_provider_candles_rejected:"+",".join(sorted(sources)))
+    owner=str(value.get("provider") or "").strip().lower()
+    if sources and owner and owner not in sources:raise ProviderUnavailable("candle_provider_mismatch")
+    return owner or (next(iter(sources)) if sources else "")
 def _enabled()->bool:return os.getenv("TRADINGVIEW_WEBHOOK_ENABLED","false").strip().lower() in {"1","true","yes","on"}
 def load_symbol_map()->dict[str,dict[str,Any]]:
     path=Path(os.getenv("TRADINGVIEW_SYMBOL_MAP_FILE",str(ROOT/"tradingview_symbols.json")))
@@ -45,6 +56,10 @@ class TradingViewBridgeProvider:
     # Stable architecture key retained for backward compatibility. Every data
     # record uses the precise V10 source label below.
     name="tradingview_alert_bridge"
+    # Emergency backup only: it can serve signals when Angel One is unusable,
+    # but the provider manager never ranks it above Angel One.
+    signal_capable=True
+    role="EMERGENCY_BACKUP"
     def __init__(self):self.symbol_map=load_symbol_map();self.cache=get_tradingview_cache();self.available=bool(_enabled() and os.getenv("TRADINGVIEW_WEBHOOK_SECRET","").strip() and any(_valid_contract(v,k) for k,v in self.symbol_map.items()))
     def _mapping(self,symbol:str)->tuple[str,dict[str,Any]]:
         for tv,item in self.symbol_map.items():
@@ -57,13 +72,15 @@ class TradingViewBridgeProvider:
         try:tf=int(str(interval).lower().replace("m",""))
         except ValueError:tf=5
         rows=self.cache.bars(tv,tf)
-        candles=[{"timestamp":x["bar_timestamp"],"open":x["open"],"high":x["high"],"low":x["low"],"close":x["close"],"volume":x["volume"]} for x in rows if x.get("bar_confirmed")]
+        if tf not in ALLOWED_TIMEFRAMES:raise ProviderUnavailable("tradingview_timeframe_not_supported")
+        candles=[{"timestamp":x["bar_timestamp"],"open":x["open"],"high":x["high"],"low":x["low"],"close":x["close"],"volume":x["volume"],"completed":True,"provider":self.name,"source":self.name} for x in rows if x.get("bar_confirmed")]
         if not candles:raise ProviderUnavailable("tradingview_cache_empty")
         quality=validate_candles(candles)
         if not quality["valid"]:raise ProviderUnavailable("tradingview_candles_rejected")
-        latest=rows[-1];result={**contract,"price":latest["close"],"timestamp":latest["generated_at"],"provider":self.name,"source_type":"TRADINGVIEW_STANDARD_ALERT_BRIDGE","is_live":True,"is_delayed":False,"interval_minutes":tf,"candles":candles,"open":pd.Series([x["open"] for x in candles]),"high":pd.Series([x["high"] for x in candles]),"low":pd.Series([x["low"] for x in candles]),"close":pd.Series([x["close"] for x in candles]),"volume":pd.Series([x["volume"] for x in candles]),"open_value":latest["open"],"latest_volume":latest["volume"],"day_high":latest.get("day_high") or max(x["high"] for x in candles[-75:]),"day_low":latest.get("day_low") or min(x["low"] for x in candles[-75:]),"atr":latest.get("atr",0),"vwap":latest.get("vwap",0),"warmup_state":self.cache.warmup_state(tv,tf,contract.get("contract_text"),contract.get("category"))}
+        latest=rows[-1];result={**contract,"price":latest["close"],"timestamp":latest["generated_at"],"provider":self.name,"source_type":"TRADINGVIEW_STANDARD_ALERT_BRIDGE","is_live":True,"is_delayed":False,"interval_minutes":tf,"candles":candles,"open":pd.Series([x["open"] for x in candles]),"high":pd.Series([x["high"] for x in candles]),"low":pd.Series([x["low"] for x in candles]),"close":pd.Series([x["close"] for x in candles]),"volume":pd.Series([x["volume"] for x in candles]),"open_value":latest["open"],"latest_volume":latest["volume"],"day_high":latest.get("day_high") or max(x["high"] for x in candles[-75:]),"day_low":latest.get("day_low") or min(x["low"] for x in candles[-75:]),"atr":latest.get("atr",0),"vwap":latest.get("vwap",0),"warmup_state":self.cache.warmup_state(tv,tf,contract.get("contract_text"),contract.get("category")),"received_at":datetime.now(timezone.utc).isoformat(),"exchange_timestamp":latest.get("bar_timestamp"),"data_source":self.name,"candle_source":self.name,"role":self.role}
         freshness=assess_market_data(result);result.update(delay_seconds=freshness["delay_seconds"],is_stale=freshness["is_stale"],freshness_status=freshness["status"])
         if not freshness["valid"]:raise ProviderUnavailable("tradingview_data_rejected")
+        assert_single_provider_dataset(result)
         return result
     def get_many(self,symbols:list[str],**kwargs)->dict[str,dict[str,Any]]:
         result={}
@@ -72,6 +89,13 @@ class TradingViewBridgeProvider:
             except Exception:pass
         return result
     def get_live_price(self,symbol:str)->float|None:return float(self.get_market_data(symbol)["price"])
+    def health_check(self)->dict[str,Any]:
+        cache=self.cache.status()
+        return {"provider":self.name,"role":self.role,"configured":bool(_enabled() and os.getenv("TRADINGVIEW_WEBHOOK_SECRET","").strip()),
+                "available":bool(self.available),"mapped_contracts":sum(1 for k,v in self.symbol_map.items() if _valid_contract(v,k)),
+                "cached_series":cache.get("series"),"accepted_alerts":cache.get("accepted"),
+                "supported_timeframes":sorted(ALLOWED_TIMEFRAMES),"outranks_primary":False,"signal_capable":True}
+    def status(self)->dict[str,Any]:return self.health_check()
     def close(self)->None:pass
 
 def _direction(item:Mapping[str,Any])->str:

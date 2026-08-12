@@ -330,6 +330,8 @@ class AngelReadOnlyProvider:
                 "close": float(row[4]),
                 "volume": float(row[5]),
                 "completed": True,
+                "provider": self.name,
+                "source": self.name,
             })
         candles.sort(key=lambda item: item["timestamp"])
         if not candles:
@@ -386,6 +388,8 @@ class AngelReadOnlyProvider:
             "read_only": True,
             "interval_minutes": minutes,
             "candles": candles,
+            "candle_source": self.name,
+            "data_source": self.name,
             "candle_quality": candle_quality,
         }
         try:
@@ -410,6 +414,8 @@ class AngelReadOnlyProvider:
         )
         if freshness["is_stale"]:
             raise AngelProviderError("angel_data_stale")
+        from tradingview_bridge import assert_single_provider_dataset
+        assert_single_provider_dataset(result)
         return result
 
     def get_ohlc(self, symbol: str) -> dict[str, Any] | None:
