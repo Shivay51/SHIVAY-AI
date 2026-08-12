@@ -12,17 +12,35 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from angel_provider import AngelReadOnlyProvider
 from data_quality import assess_market_data, validate_instrument_contract
 from provider_failover import ProviderUnavailable, execute_with_failover
+from market_session import market_state, signals_allowed
+from provider_cache import ProviderCache
 from provider_health import circuit_open, get_provider_health, rank_provider_names, record_failure, record_success
 from tradingview_bridge import TradingViewBridgeProvider
 
 LOGGER = logging.getLogger("shivay.provider.manager")
 
 NO_FRESH_DATA = "NO FRESH DATA / NO SIGNAL"
+
+# Safe verified-read cache: short enough that a 15m scanner never trades on an
+# earlier candle, long enough to protect provider rate limits.
+CACHE_TTL_SECONDS = 45
+MAX_CLOCK_SKEW_SECONDS = 90
+
+
+def _timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 class ProviderManager:
@@ -48,7 +66,58 @@ class ProviderManager:
         self.angel = AngelReadOnlyProvider()
         self.tradingview = TradingViewBridgeProvider()
         self.providers: list[Any] = [self.angel, self.tradingview]
+        self.cache = ProviderCache(ttl_seconds=CACHE_TTL_SECONDS, max_entries=512)
+        # request key -> canonical contract cache key, so a cached read is only
+        # reused for the exact provider, contract, exchange and timeframe.
+        self._cache_index: dict[str, str] = {}
         self._assert_production_architecture()
+
+    # ------------------------------------------------------------------
+    # cache + freshness
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _cache_key(provider: str, symbol: str, value: Mapping[str, Any] | None = None, timeframe: Any = None) -> str:
+        item = value or {}
+        parts = (
+            provider,
+            str(symbol).upper(),
+            str(item.get("instrument_key") or item.get("security_id") or "-"),
+            str(item.get("exchange") or "-"),
+            str(item.get("segment") or "-"),
+            str(item.get("expiry") or "-"),
+            str(item.get("interval_minutes") or timeframe or "-"),
+        )
+        return "|".join(parts)
+
+    @staticmethod
+    def _request_key(provider: str, symbol: str, timeframe: Any) -> str:
+        return f"{provider}|{str(symbol).upper()}|{timeframe or '-'}"
+
+    @staticmethod
+    def _expected_market(symbol: str) -> tuple[str, str]:
+        text = str(symbol).upper()
+        if text.startswith("MCX") or text.startswith("COMEX"):
+            return "MCX", "MCX_COMM"
+        return "NSE", "NSE_FNO"
+
+    @classmethod
+    def _cache_entry_usable(cls, value: Mapping[str, Any]) -> bool:
+        """Reject cached snapshots that became stale, skewed or incomplete."""
+        if not value or value.get("is_stale") or not value.get("candles"):
+            return False
+        exchange_time = _timestamp(value.get("exchange_timestamp") or value.get("timestamp"))
+        received = _timestamp(value.get("received_at"))
+        now = datetime.now(timezone.utc)
+        if exchange_time is None:
+            return False
+        age = (now - exchange_time).total_seconds()
+        if age < -MAX_CLOCK_SKEW_SECONDS or age > max(CACHE_TTL_SECONDS * 4, 180):
+            return False
+        if received is not None and abs((now - received).total_seconds()) > max(CACHE_TTL_SECONDS * 4, 180):
+            return False
+        if received is not None and (received - exchange_time).total_seconds() < -MAX_CLOCK_SKEW_SECONDS:
+            return False
+        return True
 
     def _assert_production_architecture(self) -> None:
         names = [provider.name for provider in self.providers]
@@ -73,11 +142,16 @@ class ProviderManager:
             ordered = [self.angel.name] + [name for name in ordered if name != self.angel.name]
         return [by_name[name] for name in ordered]
 
-    @staticmethod
-    def _verified(value: Mapping[str, Any], symbol: str) -> tuple[bool, dict[str, Any]]:
+    @classmethod
+    def _verified(cls, value: Mapping[str, Any], symbol: str) -> tuple[bool, dict[str, Any]]:
         quality = assess_market_data(value)
         errors = list(quality.get("errors", []))
         errors.extend(validate_instrument_contract(value, symbol))
+        exchange, segment = cls._expected_market(symbol)
+        if str(value.get("exchange", "")).upper() != exchange:
+            errors.append("exchange_mismatch_for_requested_symbol")
+        if str(value.get("segment", "")).upper() != segment:
+            errors.append("segment_mismatch_for_requested_symbol")
         quality["errors"] = sorted(set(errors))
         quality["valid"] = not quality["errors"]
         quality["status"] = "GOOD" if quality["valid"] else "REJECTED"
@@ -97,6 +171,13 @@ class ProviderManager:
         return execute_with_failover(self._ranked(), lambda provider: provider.get_market_data(symbol, **kwargs))[0]
 
     def get_verified_market_data(self, symbol: str, **kwargs) -> dict[str, Any]:
+        timeframe = kwargs.get("interval")
+        for provider in self._ranked(True):
+            contract_key = self._cache_index.get(self._request_key(provider.name, symbol, timeframe))
+            cached = self.cache.get_validated(contract_key, self._cache_entry_usable) if contract_key else None
+            if cached:
+                return cached
+
         def operation(provider):
             value = provider.get_market_data(symbol, **kwargs)
             valid, quality = self._verified(value, symbol)
@@ -104,6 +185,14 @@ class ProviderManager:
                 raise ProviderUnavailable("provider_data_failed_verification:" + ",".join(quality["errors"][:4]))
             value = dict(value)
             value["data_quality"] = quality
+            value.setdefault("received_at", datetime.now(timezone.utc).isoformat())
+            value["market_state"] = market_state(value.get("segment"))
+            value["signals_allowed"] = signals_allowed(value.get("segment"))
+            if not self._cache_entry_usable(value):
+                raise ProviderUnavailable("provider_data_failed_freshness_gate")
+            contract_key = self._cache_key(provider.name, symbol, value, timeframe)
+            self.cache.set(contract_key, value)
+            self._cache_index[self._request_key(provider.name, symbol, timeframe)] = contract_key
             return value
 
         return execute_with_failover(self._ranked(True), operation)[0]
@@ -178,19 +267,33 @@ class ProviderManager:
             "verified_providers": healthy,
             "providers": self.active_provider_names(),
             "active_provider_count": len(self.providers),
-            "angel_configured": self.angel.configured,
-            "angel": self.angel.health_check(),
+            "angel_configured": bool(getattr(self.angel, "configured", False)),
+            "angel": self.angel.health_check() if callable(getattr(self.angel, "health_check", None)) else {"provider": self.angel.name},
             "backup": "tradingview_alert_bridge",
-            "backup_configured": bool(self.tradingview.available),
-            "tradingview_configured": bool(self.tradingview.available),
+            "backup_configured": bool(getattr(self.tradingview, "available", False)),
+            "tradingview_configured": bool(getattr(self.tradingview, "available", False)),
+            "backup_health": self.tradingview.health_check() if callable(getattr(self.tradingview, "health_check", None)) else {"provider": self.tradingview.name},
             "fallback": "tradingview_alert_bridge_only",
             "no_data_decision": NO_FRESH_DATA,
+            "cache": self.cache.status(),
+            "cache_ttl_seconds": CACHE_TTL_SECONDS,
+            "max_clock_skew_seconds": MAX_CLOCK_SKEW_SECONDS,
+            "market": {segment: market_state(segment) for segment in ("NSE_FNO", "MCX_COMM")},
+            "signals_allowed": signals_allowed("NSE_FNO"),
             "archived_providers": list(self.ARCHIVED_PROVIDERS),
             "supported_provider_priority": list(self.DEFAULT_PRIORITY),
             "health": health,
         }
 
+    def invalidate_cache(self, prefix: str | None = None) -> int:
+        if prefix is None:
+            self._cache_index.clear()
+        else:
+            self._cache_index = {key: value for key, value in self._cache_index.items() if not value.startswith(prefix)}
+        return self.cache.invalidate(prefix)
+
     def close(self) -> bool:
+        self.cache.invalidate()
         for provider in self.providers:
             try:
                 provider.close()
