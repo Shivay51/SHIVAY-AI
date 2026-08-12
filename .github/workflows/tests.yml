@@ -1,0 +1,60 @@
+name: SHIVAY AI Tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUNBUFFERED: "1"
+      SHIVAY_TEST_MODE: "1"
+      TZ: Asia/Kolkata
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt || pip install --upgrade --upgrade-strategy only-if-needed -r requirements.txt
+          fi
+          pip install pytest pytest-timeout
+
+      - name: Compile all sources
+        run: python -m compileall -q .
+
+      - name: Run tests
+        run: python -m pytest tests -q -p no:cacheprovider --timeout=180 -rf
+
+  security:
+    name: Secret and safety checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ensure no committed secrets or live-order code
+        run: python tools/security_audit.py
