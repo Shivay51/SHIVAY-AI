@@ -52,3 +52,6 @@ cache/
 runtime/
 cloudflared.exe
 SHIVAY_AI_V10_SAFE_BACKUP.zip
+
+# Angel One instrument master disk cache (regenerated automatically)
+angel_instruments_cache.json

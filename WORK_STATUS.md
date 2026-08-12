@@ -12,9 +12,9 @@ Baseline main commit: `f4b2baa` (118 passed, 2 failed)
 |---|------|--------|
 | 1 | Repository baseline and GitHub Actions runtime | DONE |
 | 2 | Angel provider completion | DONE |
-| 3 | TradingView-only emergency backup | IN PROGRESS |
-| 4 | Provider manager, instruments, freshness and cache | PENDING |
-| 5 | Scanner, Chandelier and BUY/SELL rules | PENDING |
+| 3 | TradingView-only emergency backup | DONE |
+| 4 | Provider manager, instruments, freshness and cache | DONE |
+| 5 | Scanner, Chandelier and BUY/SELL rules | IN PROGRESS |
 | 6 | Score, risk, duplicate, cooldown and stale protections | PENDING |
 | 7 | Five-to-six-day rejection reporting/logging | PENDING |
 | 8 | Scheduler-to-Telegram full-path audit | PENDING |
@@ -43,3 +43,27 @@ Baseline main commit: `f4b2baa` (118 passed, 2 failed)
 * No order placement/modification/cancellation anywhere in runtime code.
 * No secrets committed; `.env` is git-ignored and audited.
 * Signals only; no live trades are ever placed.
+
+## Step 3 — TradingView-only emergency backup (DONE)
+The authenticated TradingView alert bridge (`tradingview_bridge.py` +
+`tradingview_security.py`: HMAC secret, replay defense, rate limiting, bar
+freshness) is now the **only** backup provider. It is registered strictly below
+Angel and is never used while Angel is healthy.
+
+## Step 4 — Provider manager, instruments, freshness and cache (DONE)
+* `provider_manager.py` rewritten: registers **only** `angelone_primary` and
+  `tradingview_alert_bridge`. Groww, Upstox, NSE/MCX temporary, tvkit, Dhan,
+  Shoonya, TrueData, GDFL, Fyers, market hub and Yahoo are unregistered at
+  runtime and exposed in `status()["disabled_providers"]`.
+* No delayed/emergency provider is registered any more: when neither Angel nor
+  the bridge supplies fresh verified data the manager raises and the engine
+  emits **NO SIGNAL** (`mode = NO_FRESH_DATA_NO_SIGNAL`).
+* Angel can never be demoted below the backup, even if `PROVIDER_PRIORITY`
+  is inverted; retired keys in configuration are ignored.
+* `config.py` / `.env.example` default priority is now
+  `angelone_primary,tradingview_alert_bridge`, plus documented `ANGEL_*` keys.
+* Instrument cache: `angel_instruments_cache.json` (6h TTL, git-ignored) with a
+  stale-cache fallback when Angel's scrip master is briefly unreachable.
+* `tests/test_runtime_architecture.py` — 16 tests covering registration,
+  failover order, no-signal behaviour, stale/delayed rejection and COMEX-as-MCX
+  contract spoofing.

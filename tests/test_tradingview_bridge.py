@@ -171,8 +171,16 @@ class ContractRiskLifecycleTests(unittest.TestCase):
             self.assertNotIn(forbidden,text.upper())
 
     def test_provider_priority(self):
+        """Angel One is the runtime primary; TradingView is the only backup."""
         from provider_manager import ProviderManager
-        self.assertEqual(ProviderManager.DEFAULT_PRIORITY[0],"tradingview_alert_bridge");self.assertEqual(ProviderManager.DEFAULT_PRIORITY[-1],"yahoo_emergency")
+        self.assertEqual(ProviderManager.RUNTIME_PROVIDERS,("angelone_primary","tradingview_alert_bridge"))
+        self.assertEqual(ProviderManager.RUNTIME_PRIMARY,"angelone_primary")
+        self.assertEqual(ProviderManager.RUNTIME_BACKUP,"tradingview_alert_bridge")
+        self.assertEqual(ProviderManager.DEFAULT_PRIORITY[0],"angelone_primary")
+        self.assertEqual(ProviderManager.DEFAULT_PRIORITY[1],"tradingview_alert_bridge")
+        self.assertIn("yahoo_emergency",ProviderManager.DISABLED_PROVIDERS)
+        ranked=ProviderManager._base_priority()
+        self.assertGreater(ranked["angelone_primary"],ranked["tradingview_alert_bridge"])
     def test_no_order_surface(self):
         from tradingview_bridge import TradingViewBridgeProvider
         provider=TradingViewBridgeProvider();self.assertFalse(any(hasattr(provider,x) for x in ("place_order","modify_order","cancel_order")))
