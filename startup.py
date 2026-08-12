@@ -582,6 +582,7 @@ def _initialize_command_handlers(application: Any) -> None:
         "marketdetails": "marketdetails", "predictiondetails": "predictiondetails",
         "golddetails": "golddetails", "silverdetails": "silverdetails",
         "provider": "provider", "systemhealth": "systemhealth",
+        "rejections": "rejections", "cooldowns": "cooldowns",
     }
     existing = _existing_command_names(application)
     for command, function_name in mapping.items():

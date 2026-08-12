@@ -350,6 +350,13 @@ async def _eod_job(app: Any) -> None:
             await send_all(app, "SHIVAY AI | DAILY REVIEW\n\nSample: %s\nWin rate: %s%%\nExpectancy: %s\nProfit factor: %s\nStrategy changed: NO\n\nTuning requires sufficient samples and walk-forward validation." % (accuracy.get("sample_size",0), accuracy.get("win_rate",0), accuracy.get("expectancy",0), accuracy.get("profit_factor",0)), "ADMIN")
     except Exception:
         LOGGER.warning("Daily review unavailable")
+    try:
+        rejection_module = importlib.import_module("rejection_report")
+        report = await _safe_call("rejection report", rejection_module.build_rejection_report)
+        if report:
+            await send_all(app, rejection_module.format_rejection_report(report), "ADMIN")
+    except Exception:
+        LOGGER.warning("Rejection report unavailable")
 
 
 async def _overnight_job(app: Any) -> None:
