@@ -23,7 +23,8 @@ from gift_nifty_prediction import predict_opening
 from market_prediction import predict_market
 from performance import get_report
 from scanner import scan_market
-from signal_memory import add_signal, clear_signals, signal_exists
+from data_quality import assess_market_data
+from signal_memory import add_signal, clear_signals, cooldown_remaining, signal_exists
 from signal_ranker import rank_trade
 from telegram_service import (
     send_buy_signal,
@@ -41,7 +42,7 @@ from telegram_service import (
     send_wait_status,
 )
 from trade_monitor import add_trade, check_trades, get_all_trades, remove_trade
-from trade_journal import record_event, record_signal
+from trade_journal import record_event, record_rejection, record_signal
 from audience_router import recipients
 
 
@@ -196,6 +197,37 @@ def _rank(signals: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return ranked[:MAX_SIGNALS]
 
 
+def _delivery_allowed(trade: dict[str, Any]) -> tuple[bool, str]:
+    """Final gate immediately before a signal is delivered to Telegram.
+
+    The scanner validates freshness when the candidate is built, but time
+    passes between scanning, ranking and sending. This re-checks the three
+    invariants that must hold at the moment of delivery:
+
+    * the payload must still be fresh (NO FRESH DATA -> NO SIGNAL);
+    * it must come from a signal-capable provider, never a delayed or
+      emergency source; and
+    * the symbol must not be inside its repeat cooldown.
+    """
+    symbol = str(trade.get("symbol", "")).strip()
+    remaining = cooldown_remaining(symbol)
+    if remaining > 0:
+        return False, f"repeat_cooldown_active:{int(remaining)}s"
+    market = trade.get("market_data")
+    if not isinstance(market, dict):
+        return False, "market_snapshot_missing"
+    if bool(market.get("is_delayed", False)):
+        return False, "delayed_data_not_signal_capable"
+    try:
+        quality = assess_market_data(market)
+    except Exception:
+        return False, "freshness_check_failed"
+    if not quality.get("valid"):
+        reasons = quality.get("errors") or ["stale_at_delivery"]
+        return False, f"stale_at_delivery:{','.join(str(item) for item in reasons)[:120]}"
+    return True, "ok"
+
+
 async def _scan_job(app: Any) -> int:
     if _SCAN_LOCK.locked():
         LOGGER.warning("Scan skipped because the previous scan is still running")
@@ -213,6 +245,16 @@ async def _scan_job(app: Any) -> int:
                     continue
                 add_trade(trade)
                 record_event("PRELIMINARY_SETUP", trade)
+                continue
+            allowed, reason = _delivery_allowed(trade)
+            if not allowed:
+                LOGGER.warning("Signal blocked before delivery: %s (%s)", trade.get("symbol"), reason)
+                with suppress(Exception):
+                    record_rejection(
+                        str(trade.get("symbol", "")),
+                        [reason],
+                        {"stage": "pre_delivery", "side": side},
+                    )
                 continue
             sender = send_buy_signal if side == "BUY" else send_sell_signal
             delivered = await _safe_call(f"send {side} signal", sender, app, trade)
@@ -308,6 +350,13 @@ async def _eod_job(app: Any) -> None:
             await send_all(app, "SHIVAY AI | DAILY REVIEW\n\nSample: %s\nWin rate: %s%%\nExpectancy: %s\nProfit factor: %s\nStrategy changed: NO\n\nTuning requires sufficient samples and walk-forward validation." % (accuracy.get("sample_size",0), accuracy.get("win_rate",0), accuracy.get("expectancy",0), accuracy.get("profit_factor",0)), "ADMIN")
     except Exception:
         LOGGER.warning("Daily review unavailable")
+    try:
+        rejection_module = importlib.import_module("rejection_report")
+        report = await _safe_call("rejection report", rejection_module.build_rejection_report)
+        if report:
+            await send_all(app, rejection_module.format_rejection_report(report), "ADMIN")
+    except Exception:
+        LOGGER.warning("Rejection report unavailable")
 
 
 async def _overnight_job(app: Any) -> None:

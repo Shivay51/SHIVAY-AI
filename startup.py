@@ -582,6 +582,7 @@ def _initialize_command_handlers(application: Any) -> None:
         "marketdetails": "marketdetails", "predictiondetails": "predictiondetails",
         "golddetails": "golddetails", "silverdetails": "silverdetails",
         "provider": "provider", "systemhealth": "systemhealth",
+        "rejections": "rejections", "cooldowns": "cooldowns",
     }
     existing = _existing_command_names(application)
     for command, function_name in mapping.items():
@@ -831,6 +832,11 @@ def _health_snapshot(internet_ready: bool | None = None) -> dict[str, Any]:
         "scanner_ready": _status.scanner_ready,
         "market_cache_ready": _status.market_cache_ready,
         "provider_ready": bool(provider_status.get("selected_primary")),
+        # Aggregate flag consumed by the Telegram startup card: the data engine
+        # is only ACTIVE when a signal-capable provider is selected and the
+        # market cache has been primed at least once.
+        "data_engine_ready": bool(provider_status.get("selected_primary"))
+        and bool(_status.market_cache_ready),
         "provider_status": provider_status,
         "provider_health": provider_health,
         "trade_monitor_ready": _status.trade_monitor_ready,

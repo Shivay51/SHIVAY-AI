@@ -317,6 +317,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "/report — Market report\n/performance — Performance report\n"
             "/gold — Gold analysis\n/silver — Silver analysis\n"
             "/datastatus — Market-data readiness\n"
+            "/rejections — Why signals were rejected (5-6 sessions)\n"
+            "/cooldowns — Symbols blocked from re-signalling\n"
             "/ping — Service health\n/version — Version\n/id — Your Telegram ID\n\n"
             "Administrator: /adduser /removeuser /listusers /startbot /stopbot /restart\n"
             "Details: /marketdetails /predictiondetails /golddetails /silverdetails /provider /systemhealth",
@@ -656,6 +658,43 @@ async def golddetails(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def silverdetails(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None: await _safe_command(update, "silverdetails", lambda: _details(update, "silver"))
 async def provider(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None: await _safe_command(update, "provider", lambda: _details(update, "provider"))
 async def systemhealth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None: await _safe_command(update, "systemhealth", lambda: _details(update, "systemhealth"))
+
+
+async def rejections(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/rejections [days] - why candidates did not become signals."""
+    async def action() -> None:
+        if not await _require_authorized(update):
+            return
+        window = 6
+        arguments = getattr(context, "args", None) or []
+        if arguments:
+            try:
+                window = int(str(arguments[0]).strip())
+            except (TypeError, ValueError):
+                window = 6
+        from rejection_report import build_rejection_report, format_rejection_report
+
+        report = await _run(build_rejection_report, window)
+        await _reply(update, format_rejection_report(report))
+    await _safe_command(update, "rejections", action)
+
+
+async def cooldowns(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/cooldowns - symbols currently blocked from re-signalling."""
+    async def action() -> None:
+        if not await _require_authorized(update):
+            return
+        from signal_memory import snapshot
+
+        active = await _run(snapshot)
+        if not active:
+            await _reply(update, "⏳ COOLDOWNS\nNo symbol is currently in cooldown.")
+            return
+        lines = ["⏳ COOLDOWNS"]
+        for symbol, remaining in list(active.items())[:20]:
+            lines.append(f"• {symbol}: {int(remaining // 60)}m {int(remaining % 60)}s left")
+        await _reply(update, "\n".join(lines))
+    await _safe_command(update, "cooldowns", action)
 
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

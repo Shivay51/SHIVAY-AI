@@ -148,6 +148,8 @@ CHANDELIER_CONFIRMATION_SECONDS = max(45, _environment_int("CHANDELIER_CONFIRMAT
 ENTRY_CONFIRMATION_CANDLES = max(1, _environment_int("ENTRY_CONFIRMATION_CANDLES", default=1))
 ENTRY_BREAK_BUFFER_ATR = max(0.0, _environment_float("ENTRY_BREAK_BUFFER_ATR", default=0.05))
 SIGNAL_MAX_AGE_CANDLES = max(1, _environment_int("SIGNAL_MAX_AGE_CANDLES", default=2))
+# Minutes a symbol stays blocked from re-signalling after a delivered signal.
+SIGNAL_REPEAT_COOLDOWN_MINUTES = max(0, _environment_int("SIGNAL_REPEAT_COOLDOWN_MINUTES", default=45))
 
 
 # ADMIN_ID is intentionally sourced at runtime; CHAT_ID remains a backward-compatible
@@ -173,11 +175,13 @@ LATE_EVENING_TIME = os.getenv("LATE_EVENING_TIME", "19:30")
 LATE_NIGHT_TIME = os.getenv("LATE_NIGHT_TIME", "23:00")
 PROVIDER_HEALTH_INTERVAL = max(60, _environment_int("PROVIDER_HEALTH_INTERVAL", default=300))
 MAX_SIGNAL_DATA_DELAY_SECONDS = max(30, _environment_int("MAX_SIGNAL_DATA_DELAY_SECONDS", default=180))
+# Runtime data plane is Angel One primary with the authenticated TradingView
+# bridge as the only backup. Any other key is ignored by ProviderManager.
 PROVIDER_PRIORITY = tuple(
     item.strip().lower()
     for item in os.getenv(
         "PROVIDER_PRIORITY",
-        "groww_primary,nse_temporary,mcx_temporary,upstox_primary,tradingview_alert_bridge,dhan_primary,shoonya_primary,truedata_primary,gdfl_primary,fyers_primary,angelone_primary,market_hub,yahoo_emergency",
+        "angelone_primary,tradingview_alert_bridge",
     ).split(",")
     if item.strip()
 )

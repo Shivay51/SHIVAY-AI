@@ -499,9 +499,41 @@ def get_audit_trail(actor: Any, limit: int = 100) -> list[dict[str, Any]]:
         return []
 
 
+def notification_recipients() -> list[int]:
+    """Resolve who receives admin/startup notifications.
+
+    Chain: ``ADMIN_IDS`` -> ``ADMIN_ID`` / ``CHAT_ID`` -> ``TELEGRAM_CHAT_ID``.
+    Without this fallback a deployment that only sets ``CHAT_ID``/
+    ``TELEGRAM_CHAT_ID`` silently loses every startup and recovery alert.
+    """
+    recipients = set(_admin_ids())
+    if not recipients:
+        for name in ("ADMIN_ID", "CHAT_ID", "TELEGRAM_CHAT_ID"):
+            candidate = _actor_id(os.getenv(name))
+            if candidate is not None:
+                recipients.add(candidate)
+                break
+    return sorted(recipients)
+
+
 async def notify_admins(application: Any, message: str | None = None) -> int:
-    """Deliver a sanitized notification, or queued admin actions, to all admins."""
+    """Deliver a sanitized notification, or queued admin actions, to all admins.
+
+    Returns the number of successful deliveries. When no recipient is
+    configured the message is re-queued so it is not lost, and a warning is
+    logged instead of failing silently.
+    """
     if application is None or not hasattr(application, "bot"):
+        return 0
+    recipients = notification_recipients()
+    if not recipients:
+        LOGGER.warning(
+            "No admin recipient is configured; set ADMIN_IDS, ADMIN_ID or CHAT_ID"
+        )
+        if message is not None:
+            with _STORAGE_LOCK:
+                _pending_notifications.append(str(message)[:300])
+                del _pending_notifications[:-100]
         return 0
     with _STORAGE_LOCK:
         if message is None:
@@ -522,7 +554,7 @@ async def notify_admins(application: Any, message: str | None = None) -> int:
             payload = f"{header}\n\n{safe_text}"
         else:
             payload = header
-        for admin_id in sorted(_admin_ids()):
+        for admin_id in recipients:
             try:
                 await application.bot.send_message(chat_id=admin_id, text=payload)
                 delivered += 1
