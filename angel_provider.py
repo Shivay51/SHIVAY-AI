@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
@@ -41,12 +43,20 @@ class AngelReadOnlyProvider:
         return self.configured
 
     def health_check(self) -> dict[str, Any]:
-        return {"provider": self.name, "configured": self.configured, "connected": bool(self.jwt_token), "read_only": True}
+        return {
+            "provider": self.name,
+            "configured": self.configured,
+            "connected": bool(self.jwt_token),
+            "read_only": True,
+        }
 
     def connect(self) -> dict[str, Any]:
         if not self.configured:
             raise AngelProviderError("Angel credentials are not configured.")
-        response = self._request("/rest/auth/angelbroking/user/v1/loginByPassword", {"clientcode": self.client_id, "password": self.pin, "totp": self.totp})
+        response = self._request(
+            "/rest/auth/angelbroking/user/v1/loginByPassword",
+            {"clientcode": self.client_id, "password": self.pin, "totp": self.totp},
+        )
         data = response.get("data") or {}
         self.jwt_token = data.get("jwtToken")
         if not self.jwt_token:
@@ -64,12 +74,29 @@ class AngelReadOnlyProvider:
         if not token:
             raise AngelProviderError("angel_symbol_token_not_configured")
         self._ensure_session()
-        response = self._request("/rest/secure/angelbroking/order/v1/getLtpData", {"exchange": instrument.get("exchange") or "NSE", "symboltoken": str(token), "tradingsymbol": instrument["trading_symbol"]})
+        response = self._request(
+            "/rest/secure/angelbroking/order/v1/getLtpData",
+            {
+                "exchange": instrument.get("exchange") or "NSE",
+                "symboltoken": str(token),
+                "tradingsymbol": instrument["trading_symbol"],
+            },
+        )
         data = response.get("data") or {}
         price = data.get("ltp")
         if price is None:
             raise AngelProviderError("angel_ltp_missing")
-        return {**instrument, "price": float(price), "timestamp": datetime.now(timezone.utc), "provider": self.name, "is_live": True, "is_delayed": False, "is_stale": False, "verified": True, "read_only": True}
+        return {
+            **instrument,
+            "price": float(price),
+            "timestamp": datetime.now(timezone.utc),
+            "provider": self.name,
+            "is_live": True,
+            "is_delayed": False,
+            "is_stale": False,
+            "verified": True,
+            "read_only": True,
+        }
 
     def get_many(self, symbols: list[str], **kwargs: Any) -> dict[str, dict[str, Any]]:
         result: dict[str, dict[str, Any]] = {}
@@ -83,7 +110,10 @@ class AngelReadOnlyProvider:
     def close(self) -> None:
         if self.jwt_token:
             try:
-                self._request("/rest/secure/angelbroking/user/v1/logout", {"clientcode": self.client_id})
+                self._request(
+                    "/rest/secure/angelbroking/user/v1/logout",
+                    {"clientcode": self.client_id},
+                )
             except Exception:
                 pass
         self.jwt_token = None
@@ -92,16 +122,54 @@ class AngelReadOnlyProvider:
         if not self.jwt_token:
             self.connect()
 
+    @staticmethod
+    def _local_ip() -> str:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except OSError:
+            return "127.0.0.1"
+
+    def _public_ip(self, fallback: str) -> str:
+        try:
+            request = Request("https://api.ipify.org", headers={"User-Agent": "SHIVAY-AI/1.0"})
+            with urlopen(request, timeout=min(self.timeout, 5)) as response:
+                value = response.read(64).decode("utf-8").strip()
+            return value or fallback
+        except (URLError, TimeoutError, OSError):
+            return fallback
+
+    @staticmethod
+    def _mac_address() -> str:
+        value = uuid.getnode()
+        return ":".join(f"{(value >> shift) & 0xFF:02x}" for shift in range(40, -1, -8))
+
     def _request(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        headers = {"Content-Type": "application/json", "Accept": "application/json", "X-PrivateKey": self.api_key, "X-UserType": "USER", "X-SourceID": "WEB"}
+        local_ip = self._local_ip()
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-PrivateKey": self.api_key,
+            "X-UserType": "USER",
+            "X-SourceID": "WEB",
+            "X-ClientLocalIP": local_ip,
+            "X-ClientPublicIP": self._public_ip(local_ip),
+            "X-MACAddress": self._mac_address(),
+        }
         if self.jwt_token:
             headers["Authorization"] = f"Bearer {self.jwt_token}"
-        request = Request(f"{self.BASE_URL}{path}", data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+        request = Request(
+            f"{self.BASE_URL}{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise AngelProviderError(f"Angel SmartAPI request failed: {exc}") from exc
-        if body.get("status") is False:
-            raise AngelProviderError(body.get("message", "Angel SmartAPI request failed."))
+        except HTTPError as exc:
+            raise AngelProviderError(f"Angel SmartAPI request failed: HTTP {exc.code}") from exc
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            raise AngelProviderError(f"Angel SmartAPI request failed: {type(exc).__name__}") from exc
+        if not isinstance(body, dict):
+            raise AngelProviderError("Angel SmartAPI returned an invalid response.")
         return body
