@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 
-from data_quality import assess_market_data, validate_candles, validate_instrument_contract
+from data_quality import assess_market_data, validate_candles
 from groww_provider import GrowwProvider
 from provider_cache import ProviderCache
 from provider_failover import ProviderUnavailable

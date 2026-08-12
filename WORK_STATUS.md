@@ -29,7 +29,8 @@ Provider architecture: `angelone_primary` → `tradingview_alert_bridge` → `NO
 | After Step 4 (session/cache/freshness gate) | 186 passed, 0 failed |
 | After Step 5 (scanner / Chandelier / symmetry) | 211 passed, 0 failed |
 | After Step 6 (duplicate / cooldown / rejection log) | 232 passed, 0 failed |
-| After Step 7 (Telegram delivery path) | **245 passed, 0 failed, 0 skipped** |
+| After Step 7 (Telegram delivery path) | 245 passed, 0 failed |
+| After Step 8 (tests + security audit) | **254 passed, 0 failed, 0 skipped** |
 
 Both baseline failures fixed:
 - `tests/test_master_completion.py::test_startup_card_is_single_clean_signals_only_message`
@@ -91,5 +92,14 @@ Real rejection report status: only 1 trading day of real records exists in this 
 - `config.py` / `.env.example` — `SIGNAL_ADMIN_ONLY=true`, `TELEGRAM_SEND_ATTEMPTS=3`, `TELEGRAM_RETRY_BACKOFF_SECONDS=1.5`.
 - `tests/test_telegram_path.py` (new, 13 tests) — required-field coverage, PREMIUM/RISKY honesty, no URLs/credentials/traces, admin-only gating, unauthorized rejection logging, retry-then-success, attempt budget exhaustion, acknowledged messages never resent, sanitisation of transmitted text, 5-minute non-overlapping scheduler assertions, and an end-to-end `_scan_job` idempotency test proving the same signal candle is delivered exactly once across two scheduler passes.
 
-Current step: 8 — fix all tests + security audit.
+## Step 8 — fix all tests + security audit
+
+- Import audit: all 106 top-level modules import cleanly; `compileall` passes on the whole tree.
+- Static analysis: `ruff` E9/F63/F7/F82 (syntax, undefined names, broken comparisons) — all clean. 45 unused imports removed across the codebase; one test that depended on a removed import (`scheduler.signal_exists`) was updated to patch the real `scheduler.can_send` gate instead. No test was weakened or skipped.
+- `security_audit.py` (new) — repository secret scan (Telegram bot tokens, JWTs, base32 TOTP secrets, private-key blocks, AWS keys, hardcoded credential assignments), `.env` tracking/ignore check, order-capability scan (`placeOrder`/`modifyOrder`/`cancelOrder`/`place_order` outside of safety guard blocks) and signals-only state verification. Findings print file and line only, never the value. Result: **0 secret findings, 0 environment findings, 0 order-capability findings, RESULT: CLEAN**.
+- Git-history scan: no committed tokens, keys, `.env`, `.pem` or `.key` files in any branch; the only token-shaped strings in history are the two obviously fake test fixtures.
+- `dry_run.py` (new) — offline end-to-end dry run with no network, no orders and no Telegram transmission. **17/17 checks pass**: exactly two providers with Angel first, no third fallback, no order methods on any provider, futures contract resolution (NIFTY/BANKNIFTY/GOLD/SILVER), stale-data and clock-skew rejection, market-session gate, IGNORE never deliverable, duplicate suppression, signal memory surviving restart, admin-only delivery, all required message fields, sanitisation of URLs/tokens/tracebacks, delivery idempotency, 5-minute non-overlapping single-instance scheduler, signals-only safety flags, and a clean security audit.
+- `tests/test_security_audit.py` (new, 9 tests) — keeps the audit and the dry run green in CI, and proves the secret detector still detects a planted secret (so a passing audit cannot be a false negative).
+
+Current step: 9 — one-click Windows update/start.
 Blockers: no live Angel credentials in the workspace (Step 2/10 evidence is unit-level); GitHub push authorization unconfirmed; no Windows/VPS access for Step 9/10 live verification.

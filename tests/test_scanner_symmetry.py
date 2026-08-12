@@ -268,9 +268,9 @@ class SchedulerDeliveryGateTests(unittest.TestCase):
     def test_rank_drops_ignore_class_signals(self) -> None:
         import scheduler
 
-        original_exists = scheduler.signal_exists
+        original_can_send = scheduler.can_send
         original_rank = scheduler.rank_trade
-        scheduler.signal_exists = lambda symbol: False
+        scheduler.can_send = lambda symbol, side=None: (True, "no_previous_signal")
         scheduler.rank_trade = lambda signal: {"valid": True, "signal_score": signal.get("score", 0)}
         try:
             confirmed = {"confirmed": True, "side": "BUY"}
@@ -284,5 +284,5 @@ class SchedulerDeliveryGateTests(unittest.TestCase):
             self.assertEqual(ranked[0]["signal_classification"], "SAFE")
             self.assertTrue(ranked[0]["premium_signal"])
         finally:
-            scheduler.signal_exists = original_exists
+            scheduler.can_send = original_can_send
             scheduler.rank_trade = original_rank

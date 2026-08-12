@@ -1,5 +1,5 @@
 from core.decision_engine import get_decision
-from config import MIN_SCORE, MIN_RISK_REWARD
+from config import MIN_SCORE
 
 
 def analyze_trade(symbol, score_data):

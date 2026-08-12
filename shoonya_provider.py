@@ -21,7 +21,7 @@ import requests
 from data_quality import assess_market_data, parse_timestamp, validate_candles
 from provider_cache import ProviderCache
 from provider_failover import ProviderUnavailable
-from shoonya_client import ShoonyaAuthenticationError, ShoonyaClient, ShoonyaUnavailable
+from shoonya_client import ShoonyaClient
 
 LOGGER=logging.getLogger("shivay.provider.shoonya")
 ROOT=Path(__file__).resolve().parent;MASTER_FILE=ROOT/"cache"/"shoonya_instruments.json";IST=ZoneInfo("Asia/Kolkata")

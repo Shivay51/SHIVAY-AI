@@ -19,7 +19,6 @@ from gift_nifty import (
     get_gift_nifty_regime,
     get_gift_nifty_strength,
 )
-from gift_nifty_prediction import predict_opening
 from market_prediction import predict_market
 from performance import get_report
 from scanner import scan_market
@@ -32,7 +31,6 @@ from signal_memory import (
     delivery_key,
     mark_delivered,
     purge_expired,
-    signal_exists,
 )
 from signal_ranker import rank_trade
 from telegram_service import (
@@ -40,7 +38,6 @@ from telegram_service import (
     send_daily_summary,
     send_full_exit,
     send_market_report,
-    send_morning_prediction,
     send_overnight_report,
     send_partial_exit,
     send_sell_signal,
@@ -48,7 +45,6 @@ from telegram_service import (
     send_target_hit,
     send_trade_update,
     send_trailing_update,
-    send_wait_status,
 )
 from trade_monitor import add_trade, check_trades, get_all_trades, remove_trade
 from trade_journal import record_event, record_signal

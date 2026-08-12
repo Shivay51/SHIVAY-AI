@@ -10,7 +10,7 @@ import threading
 import time
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import config

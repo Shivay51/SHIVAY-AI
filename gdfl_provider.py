@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 import pandas as pd
 from data_quality import assess_market_data, validate_candles, validate_instrument_contract
-from gdfl_client import GDFLClient, GDFLError
+from gdfl_client import GDFLClient
 from provider_cache import ProviderCache
 from provider_failover import ProviderUnavailable
 

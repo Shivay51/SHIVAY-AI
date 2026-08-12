@@ -10,14 +10,12 @@ import logging
 import math
 import threading
 from collections import defaultdict
-from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from security import sanitize_text, secure_json_load, secure_json_write, validate_file_path
-from audience_router import recipients
 
 
 LOGGER = logging.getLogger("shivay.performance")

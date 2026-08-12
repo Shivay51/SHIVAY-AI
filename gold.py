@@ -13,7 +13,7 @@ import threading
 import time
 from copy import deepcopy
 from datetime import date, datetime, time as clock_time, timedelta
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 import config

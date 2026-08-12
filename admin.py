@@ -13,7 +13,7 @@ import threading
 from copy import deepcopy
 from datetime import date, datetime, time, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import config
 
