@@ -17,7 +17,7 @@ Provider architecture: `angelone_primary` → `tradingview_alert_bridge` → `NO
 | 7 | Scanner → Telegram full path | DONE |
 | 8 | All tests + security audit | PENDING |
 | 9 | Windows one-click runtime | PENDING |
-| 10 | Deployment / live readiness | PENDING |
+| 10 | Deployment / live readiness | DONE (verification complete, decision NOT READY) |
 
 ## Tests
 
@@ -31,7 +31,8 @@ Provider architecture: `angelone_primary` → `tradingview_alert_bridge` → `NO
 | After Step 6 (duplicate / cooldown / rejection log) | 232 passed, 0 failed |
 | After Step 7 (Telegram delivery path) | 245 passed, 0 failed |
 | After Step 8 (tests + security audit) | 254 passed, 0 failed |
-| After Step 9 (Windows one-click runtime) | **267 passed, 0 failed, 0 skipped** |
+| After Step 9 (Windows one-click runtime) | 267 passed, 0 failed |
+| After Step 10 (live readiness verification) | **274 passed, 0 failed, 0 skipped** |
 
 Both baseline failures fixed:
 - `tests/test_master_completion.py::test_startup_card_is_single_clean_signals_only_message`
@@ -110,5 +111,18 @@ Real rejection report status: only 1 trading day of real records exists in this 
 - Launchers: `START_SHIVAY.bat`, `RESTART_SHIVAY.bat`, `STATUS_SHIVAY.bat`, `STOP_SHIVAY.bat` (new), `UPDATE_SHIVAY.bat` (new), `CHECK_SHIVAY.bat` (new) — each path-independent (`%~dp0`) and forwarding the control script's exit code.
 - `tests/test_windows_runtime.py` (new, 13 tests) — launcher presence/wiring, all six actions, start idempotency and duplicate-process prevention, correct-process-only stop, local-change preservation + test gate on update, rollback instructions, pre-flight before start, ready/not-ready detection, and two leak tests proving no setting value appears in either text or JSON output.
 
-Current step: 10 — deployment / live readiness verification.
+## Step 10 — deployment / live readiness verification
+
+- `live_readiness.py` (new) — runs 14 verification rows in-process and writes `LIVE_READINESS.md`. Every row is decided by direct evidence: git branch/SHA, provider topology, absence of a third provider, scheduler cadence and overlap lock, admin-only Telegram gate, single-instance protection, stale/clock-skew rejection, absence of any live-order capability, restart recovery of signal memory, and the full test suite. Anything that genuinely requires live Angel One credentials, a real bot token, or an open market session is reported as **NOT VERIFIED** — the verifier can only return READY when zero rows are unverified, so a passing report can never be a false claim.
+- `tests/test_live_readiness.py` (new, 7 tests) — proves the verifier cannot overclaim: credential-dependent rows stay NOT VERIFIED both without and with credentials until a session is observed, the decision is never READY while any row is unverified, BLOCKED wins over NOT READY, all 14 required rows exist, and the rendered table always carries a FINAL DECISION line.
+- Result: **10 VERIFIED, 4 NOT VERIFIED, 0 BLOCKED — FINAL DECISION: NOT READY.** The four unverified rows are Angel One live authentication, live LTP/OHLC/volume/OI, live 15m futures candles, and one genuine market-session observation. All four are blocked only by the absence of live credentials and an open market session in this workspace, not by any code defect.
+
+## Blockers
+
+1. **No live Angel One credentials in this workspace** — `ANGEL_API_KEY`, `ANGEL_CLIENT_CODE`, `ANGEL_MPIN`, `ANGEL_TOTP_SECRET` are absent, so Step 2 and Step 10 live evidence is unit-level only. No login was attempted.
+2. **No observed market session** — the rejection report truthfully covers 1 trading day and is marked INCOMPLETE; the 5–6 trading-day report will complete itself once the bot runs through real sessions.
+3. **No Windows/VPS access** — the Step 9 scripts are verified structurally and by unit test, not by execution on a Windows host.
+4. **GitHub push authorization unconfirmed** — all work is committed locally on `fix/angel-production-completion`.
+
+Current step: all 10 steps executed.
 Blockers: no live Angel credentials in the workspace (Step 2/10 evidence is unit-level); GitHub push authorization unconfirmed; no Windows/VPS access for Step 9/10 live verification.
