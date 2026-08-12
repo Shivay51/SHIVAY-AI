@@ -7,12 +7,14 @@ from copy import deepcopy
 from typing import Any
 
 from ai_watchlist import get_ai_watchlist
-from config import MAX_TRADES
+from config import MAX_TRADES, PRIMARY_TIMEFRAME_MINUTES
+from market_session import market_state, signals_allowed
 from data import get_market_data
 from data_quality import assess_market_data
 from engine import run_engine
 from entry_validity import evaluate_entry_validity
 from sector_strength import get_sector, sector_priority
+from signal_classification import annotate, classify
 from strategy import analyze_trade
 from trade_journal import record_rejection
 from tradeplan import create_trade_plan
@@ -40,6 +42,15 @@ def scan_market() -> list[dict[str, Any]]:
     rejected: Counter[str] = Counter()
     scanned: set[str] = set()
     watchlist = list(dict.fromkeys(str(item).strip() for item in get_ai_watchlist() if str(item).strip()))
+
+    if not signals_allowed("NSE_FNO") and not signals_allowed("MCX_COMM"):
+        _LAST_DIAGNOSTICS = {
+            "scanned": 0, "eligible_alerts": 0, "rejected": len(watchlist),
+            "rejection_reasons": {"market_closed": len(watchlist)},
+            "market_state": market_state("NSE_FNO"), "timeframe_minutes": int(PRIMARY_TIMEFRAME_MINUTES),
+        }
+        LOGGER.info("Scan skipped: market closed (%s)", market_state("NSE_FNO"))
+        return []
 
     for symbol in watchlist:
         if symbol in scanned:
@@ -99,7 +110,7 @@ def scan_market() -> list[dict[str, Any]]:
                     rejected[str(reason)] += 1
                 _reject(rejected, symbol, "entry_validity_failed", {"reasons": reasons})
                 continue
-            results.append({
+            candidate = {
                 "symbol": symbol, "sector": get_sector(symbol), "sector_priority": sector_priority(symbol),
                 "price": round(price, 2), "entry": plan["entry"], "entry_zone": plan.get("entry_zone", (plan["entry"], plan["entry"])),
                 "sl": plan["sl"], "target1": plan["target1"], "target2": plan["target2"], "target3": plan["target3"],
@@ -116,7 +127,14 @@ def scan_market() -> list[dict[str, Any]]:
                 "invalidation_condition": validity.get("invalidation_condition"), "market_data": market,
                 "entry_confirmed": True, "requires_entry_confirmation": False,
                 "signal_candle": signal_candle, "chandelier_entry_state": entry_state,
-            })
+                "timeframe_minutes": int(PRIMARY_TIMEFRAME_MINUTES),
+                "market_state": market_state(market.get("segment")),
+            }
+            verdict = classify(candidate)
+            if not verdict["deliverable"]:
+                _reject(rejected, symbol, "signal_class_ignored", {"reasons": verdict["reasons"], "score": verdict["score"]})
+                continue
+            results.append(annotate(candidate))
         except Exception as error:
             _reject(rejected, symbol, "scanner_exception", {"error": type(error).__name__})
             LOGGER.warning("Scan recovered for %s: %s", symbol, type(error).__name__)
@@ -125,6 +143,11 @@ def scan_market() -> list[dict[str, Any]]:
     _LAST_DIAGNOSTICS = {
         "scanned": len(scanned), "eligible_alerts": len(results), "rejected": sum(rejected.values()),
         "rejection_reasons": dict(rejected.most_common()),
+        "timeframe_minutes": int(PRIMARY_TIMEFRAME_MINUTES),
+        "market_state": market_state("NSE_FNO"),
+        "safe": sum(1 for item in results if item.get("signal_classification") == "SAFE"),
+        "risky": sum(1 for item in results if item.get("signal_classification") == "RISKY"),
+        "premium": sum(1 for item in results if item.get("premium_signal")),
     }
     LOGGER.info("Scan complete: scanned=%s alerts=%s rejected=%s", len(scanned), len(results), sum(rejected.values()))
     return results[:max(1, int(MAX_TRADES))]

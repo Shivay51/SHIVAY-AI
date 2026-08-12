@@ -145,6 +145,17 @@ def _environment_int(*names, default=0):
 CHANDELIER_ATR_PERIOD = max(2, _environment_int("CHANDELIER_ATR_PERIOD", default=7))
 CHANDELIER_ATR_MULTIPLIER = max(0.1, _environment_float("CHANDELIER_ATR_MULTIPLIER", default=2.0))
 CHANDELIER_CONFIRMATION_SECONDS = max(45, _environment_int("CHANDELIER_CONFIRMATION_SECONDS", default=60))
+# A confirmation is only valid inside the first minutes of the next candle: a
+# late confirmation or an over-travelled price is rejected instead of chased.
+CHANDELIER_CONFIRMATION_MAX_SECONDS = max(
+    CHANDELIER_CONFIRMATION_SECONDS + 30,
+    _environment_int("CHANDELIER_CONFIRMATION_MAX_SECONDS", default=180),
+)
+CHANDELIER_MAX_ENTRY_TRAVEL_ATR = max(0.1, _environment_float("CHANDELIER_MAX_ENTRY_TRAVEL_ATR", default=0.75))
+MIN_HOLD_MINUTES = max(1, _environment_int("MIN_HOLD_MINUTES", default=10))
+ACTIONABLE_SCORE = max(50, min(_environment_int("ACTIONABLE_SCORE", default=70), 95))
+PREMIUM_SCORE = max(ACTIONABLE_SCORE + 5, _environment_int("PREMIUM_SCORE", default=90))
+SAFE_SCORE = max(ACTIONABLE_SCORE, min(_environment_int("SAFE_SCORE", default=80), PREMIUM_SCORE))
 ENTRY_CONFIRMATION_CANDLES = max(1, _environment_int("ENTRY_CONFIRMATION_CANDLES", default=1))
 ENTRY_BREAK_BUFFER_ATR = max(0.0, _environment_float("ENTRY_BREAK_BUFFER_ATR", default=0.05))
 SIGNAL_MAX_AGE_CANDLES = max(1, _environment_int("SIGNAL_MAX_AGE_CANDLES", default=2))

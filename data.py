@@ -2,6 +2,7 @@
 from __future__ import annotations
 import logging,threading,time
 from typing import Any
+from config import PRIMARY_TIMEFRAME_MINUTES
 from provider_manager import get_provider_manager,get_provider_status,reset_provider_manager
 LOGGER=logging.getLogger("shivay.data")
 SYMBOLS={
@@ -12,7 +13,7 @@ def refresh_market()->None:
     with _lock:
         if _cache and time.time()-_last_update<CACHE_SECONDS:return
         try:
-            values=get_provider_manager().get_verified_many(list(SYMBOLS),period="5d",interval="5m");_cache=values;_last_update=time.time()
+            values=get_provider_manager().get_verified_many(list(SYMBOLS),period="5d",interval=f"{int(PRIMARY_TIMEFRAME_MINUTES)}m");_cache=values;_last_update=time.time()
         except Exception as error:LOGGER.warning("Provider refresh failed: %s",type(error).__name__)
 def get_market_data(symbol:str)->dict[str,Any]|None:
     refresh_market();value=_cache.get(symbol);return value.copy() if value else None

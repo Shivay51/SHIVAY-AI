@@ -23,6 +23,7 @@ from gift_nifty_prediction import predict_opening
 from market_prediction import predict_market
 from performance import get_report
 from scanner import scan_market
+from signal_classification import annotate, is_deliverable
 from signal_memory import add_signal, clear_signals, signal_exists
 from signal_ranker import rank_trade
 from telegram_service import (
@@ -182,6 +183,10 @@ def _rank(signals: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             LOGGER.exception("Signal ranking failed for %s", symbol)
         if not signal.get("valid"):
             continue
+        if not is_deliverable(signal):
+            LOGGER.info("Signal suppressed as IGNORE class: %s", symbol)
+            continue
+        annotate(signal)
         signal["_side"] = side
         current = best_by_symbol.get(symbol)
         key = (

@@ -10,9 +10,9 @@ Provider architecture: `angelone_primary` → `tradingview_alert_bridge` → `NO
 |---|------|--------|
 | 1 | Repository & baseline | DONE |
 | 2 | Angel One primary provider | DONE (unit-verified, live credentials pending) |
-| 3 | TradingView as only backup | IN PROGRESS |
-| 4 | Provider manager / cache / freshness | IN PROGRESS |
-| 5 | Scanner / Chandelier / BUY-SELL | PENDING |
+| 3 | TradingView as only backup | DONE |
+| 4 | Provider manager / cache / freshness | DONE |
+| 5 | Scanner / Chandelier / BUY-SELL | DONE |
 | 6 | Duplicate / cooldown / rejection report | PENDING |
 | 7 | Scanner → Telegram full path | PENDING |
 | 8 | All tests + security audit | PENDING |
@@ -24,7 +24,10 @@ Provider architecture: `angelone_primary` → `tradingview_alert_bridge` → `NO
 | Run | Result |
 |-----|--------|
 | Baseline (`f4b2baa`) | 118 passed, 2 failed |
-| After Step 2 + architecture rewire | **149 passed, 0 failed, 0 skipped** |
+| After Step 2 + architecture rewire | 149 passed, 0 failed |
+| After Step 3 (backup role hardening) | 162 passed, 0 failed |
+| After Step 4 (session/cache/freshness gate) | 186 passed, 0 failed |
+| After Step 5 (scanner / Chandelier / symmetry) | **211 passed, 0 failed, 0 skipped** |
 
 Both baseline failures fixed:
 - `tests/test_master_completion.py::test_startup_card_is_single_clean_signals_only_message`
@@ -51,3 +54,18 @@ Both baseline failures fixed:
 ## Next action
 
 Step 3 — TradingView backup hardening (webhook auth, replay protection, completed-candle validation, exact futures mapping, persistent candle store, never outranks Angel, no mixed-provider candles).
+
+
+## Step 5 — scanner / Chandelier / BUY-SELL safety
+
+- `signal_classification.py` (new) — score >= 70 actionable, 80+ SAFE, 90+ SAFE + PREMIUM tier, below 70 IGNORE. IGNORE-class signals are never delivered (filtered in both `scanner.scan_market` and `scheduler._rank`). Identical thresholds for BUY and SELL.
+- `chandelier_exit.py` — confirmation window now has an upper bound (`CHANDELIER_CONFIRMATION_MAX_SECONDS`, late confirmation rejected), over-travelled entries rejected against ATR (`CHANDELIER_MAX_ENTRY_TRAVEL_ATR`), signal-candle hard invalidation enforced at confirmation, minimum hold minutes attached to every confirmed state. Non-adjacent next candle is still refused.
+- `strategy.py` — BUY/SELL symmetry repaired: SELL RSI band mirrored to 28–46 (was 25–48), SELL now requires `market_strength <= 45` mirroring BUY's `>= 55`, and SELL rejects SIDEWAYS markets like BUY does.
+- `scanner.py` — market-session gate (no scan output when the market is closed), 15m primary timeframe recorded on every candidate, classification annotated, SAFE/RISKY/PREMIUM counters in scan diagnostics.
+- `data.py` — scan universe requested at the 15m primary timeframe instead of 5m; universe is NSE F&O + MCX futures contracts only.
+- `angel_instruments.py` — legacy `GOLD FUT` / `SILVER FUT` / `CRUDEOIL FUT` / `NATURALGAS FUT` / `COPPER FUT` aliases resolve to the correct MCX futures contracts.
+- `config.py` — `CHANDELIER_CONFIRMATION_MAX_SECONDS`, `CHANDELIER_MAX_ENTRY_TRAVEL_ATR`, `MIN_HOLD_MINUTES=10`, `ACTIONABLE_SCORE=70`, `SAFE_SCORE=80`, `PREMIUM_SCORE=90`.
+- `tests/test_scanner_symmetry.py` (new, 25 tests) — timeframe/cadence, classification thresholds mirrored across BUY and SELL, BUY and SELL signal detection + confirmation, pending confirmation, late rejection, over-travel rejection on both sides, signal-candle invalidation, non-adjacent candle refusal, minimum hold, trailing-stop mirroring, strategy gate symmetry assertions, market-closed scan gate, futures-only universe, delivery-path IGNORE suppression.
+
+Current step: 6 — duplicate / cooldown / persistence / rejection report.
+Blockers: no live Angel credentials in the workspace (Step 2/10 evidence is unit-level); GitHub push authorization unconfirmed; no Windows/VPS access for Step 9/10 live verification.

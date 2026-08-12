@@ -70,7 +70,7 @@ def analyze_trade(symbol, score_data):
         and ema20 < ema50 < ema200
         and price < vwap_value
         and adx_value >= 22
-        and 25 <= rsi <= 48
+        and 28 <= rsi <= 46
         and not macd_ok
         and not supertrend_ok
         and volume_ok
@@ -78,6 +78,8 @@ def analyze_trade(symbol, score_data):
         and timeframe_aligned
         and entry_timing
         and context_score >= 75
+        and market_strength <= 45
+        and "SIDEWAYS" not in market_direction
         and "BULLISH" not in market_direction
         and atr_value > 0
         and extension <= 2.2

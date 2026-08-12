@@ -255,12 +255,34 @@ def evaluate_chandelier_entry_state(
     minimum = max(45, int(getattr(config, "CHANDELIER_CONFIRMATION_SECONDS", 60)))
     if elapsed < minimum:
         return {**base, "confirmation_candle": confirmation, "confirmation_elapsed_seconds": round(max(0, elapsed), 1)}
+    maximum = max(minimum + 30, int(getattr(config, "CHANDELIER_CONFIRMATION_MAX_SECONDS", 180)))
+    if elapsed > maximum:
+        return {**base, "status": "REJECTED", "confirmation_candle": confirmation,
+                "confirmation_elapsed_seconds": round(elapsed, 1),
+                "reason": "confirmation_window_expired"}
+    signal_close = float(signal["close"])
+    atr_value = float(at_signal.get("atr") or 0)
+    travel_limit = atr_value * max(0.1, float(getattr(config, "CHANDELIER_MAX_ENTRY_TRAVEL_ATR", 0.75)))
+    travel = confirmation["close"] - signal_close if side == "BUY" else signal_close - confirmation["close"]
+    if atr_value > 0 and travel > travel_limit:
+        return {**base, "status": "REJECTED", "confirmation_candle": confirmation,
+                "confirmation_elapsed_seconds": round(elapsed, 1),
+                "entry_travel": round(travel, 4), "entry_travel_limit": round(travel_limit, 4),
+                "reason": "entry_over_travelled"}
+    invalidation = float(base["hard_invalidation_level"])
+    breached = confirmation["close"] <= invalidation if side == "BUY" else confirmation["close"] >= invalidation
+    if breached:
+        return {**base, "status": "REJECTED", "confirmation_candle": confirmation,
+                "confirmation_elapsed_seconds": round(elapsed, 1),
+                "reason": "signal_candle_invalidated"}
     favourable = confirmation["close"] > confirmation["open"] if side == "BUY" else confirmation["close"] < confirmation["open"]
     confirmed = bool(favourable)
     return {
         **base, "confirmed": confirmed,
         "status": "CONFIRMED" if confirmed else "REJECTED", "side": side,
         "reason": "next_candle_first_minute_confirmed" if confirmed else "next_candle_first_minute_moved_against_signal",
+        "entry_travel": round(travel, 4), "entry_travel_limit": round(travel_limit, 4),
+        "minimum_hold_minutes": int(getattr(config, "MIN_HOLD_MINUTES", 10)),
         "signal_candle": signal, "confirmation_candle": confirmation,
         "confirmation_elapsed_seconds": round(elapsed, 1), "evaluated_at": evaluated_at,
     }

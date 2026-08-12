@@ -46,6 +46,14 @@ FUTURES_MAP: dict[str, dict[str, str]] = {
     "MCX NATURALGAS": {"name": "NATURALGAS", "instrument_type": "FUTCOM", "exch_seg": "MCX"},
     "MCX COPPER": {"name": "COPPER", "instrument_type": "FUTCOM", "exch_seg": "MCX"},
 }
+# Legacy scanner aliases resolve to the same MCX futures contracts.
+FUTURES_MAP.update({
+    "GOLD FUT": dict(FUTURES_MAP["MCX GOLD"]),
+    "SILVER FUT": dict(FUTURES_MAP["MCX SILVER"]),
+    "CRUDEOIL FUT": dict(FUTURES_MAP["MCX CRUDEOIL"]),
+    "NATURALGAS FUT": dict(FUTURES_MAP["MCX NATURALGAS"]),
+    "COPPER FUT": dict(FUTURES_MAP["MCX COPPER"]),
+})
 
 
 class AngelInstrumentError(RuntimeError):
