@@ -16,6 +16,7 @@ from entry_validity import evaluate_entry_validity
 from sector_strength import get_sector, sector_priority
 from signal_classification import annotate, classify
 from strategy import analyze_trade
+import rejection_log
 from trade_journal import record_rejection
 from tradeplan import create_trade_plan
 
@@ -26,6 +27,10 @@ _ALLOWED_DECISIONS = {"🔥 STRONG BUY", "✅ BUY", "🔥 STRONG SELL", "🔻 SE
 
 def _reject(counter: Counter[str], symbol: str, reason: str, context: dict[str, Any] | None = None) -> None:
     counter[reason] += 1
+    try:
+        rejection_log.record(symbol, reason, context or {}, stage="SCANNER")
+    except Exception:
+        LOGGER.debug("Rejection log unavailable for %s", symbol)
     try:
         record_rejection(symbol, [reason], context or {})
     except Exception:
@@ -49,6 +54,8 @@ def scan_market() -> list[dict[str, Any]]:
             "rejection_reasons": {"market_closed": len(watchlist)},
             "market_state": market_state("NSE_FNO"), "timeframe_minutes": int(PRIMARY_TIMEFRAME_MINUTES),
         }
+        for name in watchlist:
+            _reject(Counter(), name, "market_closed", {"market_state": market_state("NSE_FNO")})
         LOGGER.info("Scan skipped: market closed (%s)", market_state("NSE_FNO"))
         return []
 

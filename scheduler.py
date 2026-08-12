@@ -24,7 +24,16 @@ from market_prediction import predict_market
 from performance import get_report
 from scanner import scan_market
 from signal_classification import annotate, is_deliverable
-from signal_memory import add_signal, clear_signals, signal_exists
+from signal_memory import (
+    add_signal,
+    already_delivered,
+    can_send,
+    clear_signals,
+    delivery_key,
+    mark_delivered,
+    purge_expired,
+    signal_exists,
+)
 from signal_ranker import rank_trade
 from telegram_service import (
     send_buy_signal,
@@ -174,7 +183,11 @@ def _rank(signals: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         symbol = str(original.get("symbol", "")).strip()
         side = _side(original)
-        if not symbol or side is None or signal_exists(symbol):
+        if not symbol or side is None:
+            continue
+        allowed, reason = can_send(symbol, side)
+        if not allowed:
+            LOGGER.info("Signal suppressed for %s: %s", symbol, reason)
             continue
         signal = original.copy()
         try:
@@ -207,6 +220,7 @@ async def _scan_job(app: Any) -> int:
         return 0
     delivered_count = 0
     async with _SCAN_LOCK:
+        purge_expired()
         signals = await _safe_call("market scan", scan_market) or []
         for trade in _rank(signals):
             side = trade.pop("_side")
@@ -219,12 +233,18 @@ async def _scan_job(app: Any) -> int:
                 add_trade(trade)
                 record_event("PRELIMINARY_SETUP", trade)
                 continue
+            candle = ((trade.get("signal_candle") or {}) if isinstance(trade.get("signal_candle"), dict) else {}).get("timestamp")
+            key = delivery_key(trade.get("symbol"), side, candle)
+            if already_delivered(key):
+                LOGGER.info("Delivery already acknowledged for %s", trade.get("symbol"))
+                continue
             sender = send_buy_signal if side == "BUY" else send_sell_signal
             delivered = await _safe_call(f"send {side} signal", sender, app, trade)
             if delivered:
                 delivered_count += 1
+                mark_delivered(key)
                 trade["telegram_time"] = datetime.now(IST).isoformat()
-                add_signal(str(trade["symbol"]))
+                add_signal(str(trade["symbol"]), side, score=trade.get("score"))
                 add_trade(trade)
                 record_signal(trade)
     return delivered_count

@@ -152,12 +152,15 @@ async def process_accepted_payload(application:Any,payload:TradingViewPayload)->
         supported,reason=_nse_market_support(side)
         if not supported:return {"decision":"WAIT","reason":reason}
     trade={**plan,"symbol":internal,"decision":decision,"side":side,"price":price,"atr":atr,"support":signal["swing_low"],"resistance":signal["swing_high"],"trend":"STRONG BULLISH" if side=="BUY" and strong else "STRONG BEARISH" if strong else "BULLISH" if side=="BUY" else "BEARISH","signal_candle":signal_candle,"signal_candle_open":signal_candle["open"],"signal_candle_high":signal_candle["high"],"signal_candle_low":signal_candle["low"],"signal_candle_close":signal_candle["close"],"signal_candle_timestamp":signal_candle.get("timestamp"),"confirmation_candle":confirmation_candle,"confirmation_candle_timestamp":confirmation_candle.get("timestamp"),"chandelier_signal_level":entry_state.get("chandelier_level"),"hard_invalidation_level":hard_invalidation,"chandelier_entry_state":entry_state,"entry_confirmed":True,"requires_entry_confirmation":False,"entry_trigger_status":"CONFIRMED","entry_confirmation_reason":entry_state.get("reason"),"expected_hold":"25-30 MIN / 30-60 MIN / 1-2 HOURS","provider":TradingViewBridgeProvider.name,"market_category":"MCX" if mapping.get("exchange")=="MCX" else "NSE F&O","segment":mapping.get("segment"),"instrument_type":mapping.get("instrument_type"),"valid_until":(datetime.now(timezone.utc)+timedelta(minutes=18)).isoformat()}
-    from signal_memory import signal_exists,add_signal
-    if signal_exists(internal):return {"decision":"WAIT","reason":"duplicate_signal"}
+    from signal_memory import add_signal,already_delivered,can_send,delivery_key,mark_delivered
+    allowed,reason=can_send(internal,side)
+    if not allowed:return {"decision":"WAIT","reason":reason}
+    key=delivery_key(internal,side,signal_candle.get("timestamp"))
+    if already_delivered(key):return {"decision":"WAIT","reason":"already_delivered"}
     sender=__import__('telegram_service').send_buy_signal if side=="BUY" else __import__('telegram_service').send_sell_signal
     delivered=await sender(application,trade)
     if delivered:
-        add_signal(internal);__import__('trade_monitor').add_trade(trade)
+        mark_delivered(key);add_signal(internal,side,score=trade.get("score"));__import__('trade_monitor').add_trade(trade)
         try:
             from trade_journal import record_signal
             record_signal(trade)

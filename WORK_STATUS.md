@@ -13,7 +13,7 @@ Provider architecture: `angelone_primary` → `tradingview_alert_bridge` → `NO
 | 3 | TradingView as only backup | DONE |
 | 4 | Provider manager / cache / freshness | DONE |
 | 5 | Scanner / Chandelier / BUY-SELL | DONE |
-| 6 | Duplicate / cooldown / rejection report | PENDING |
+| 6 | Duplicate / cooldown / rejection report | DONE |
 | 7 | Scanner → Telegram full path | PENDING |
 | 8 | All tests + security audit | PENDING |
 | 9 | Windows one-click runtime | PENDING |
@@ -27,7 +27,8 @@ Provider architecture: `angelone_primary` → `tradingview_alert_bridge` → `NO
 | After Step 2 + architecture rewire | 149 passed, 0 failed |
 | After Step 3 (backup role hardening) | 162 passed, 0 failed |
 | After Step 4 (session/cache/freshness gate) | 186 passed, 0 failed |
-| After Step 5 (scanner / Chandelier / symmetry) | **211 passed, 0 failed, 0 skipped** |
+| After Step 5 (scanner / Chandelier / symmetry) | 211 passed, 0 failed |
+| After Step 6 (duplicate / cooldown / rejection log) | **232 passed, 0 failed, 0 skipped** |
 
 Both baseline failures fixed:
 - `tests/test_master_completion.py::test_startup_card_is_single_clean_signals_only_message`
@@ -67,5 +68,20 @@ Step 3 — TradingView backup hardening (webhook auth, replay protection, comple
 - `config.py` — `CHANDELIER_CONFIRMATION_MAX_SECONDS`, `CHANDELIER_MAX_ENTRY_TRAVEL_ATR`, `MIN_HOLD_MINUTES=10`, `ACTIONABLE_SCORE=70`, `SAFE_SCORE=80`, `PREMIUM_SCORE=90`.
 - `tests/test_scanner_symmetry.py` (new, 25 tests) — timeframe/cadence, classification thresholds mirrored across BUY and SELL, BUY and SELL signal detection + confirmation, pending confirmation, late rejection, over-travel rejection on both sides, signal-candle invalidation, non-adjacent candle refusal, minimum hold, trailing-stop mirroring, strategy gate symmetry assertions, market-closed scan gate, futures-only universe, delivery-path IGNORE suppression.
 
-Current step: 6 — duplicate / cooldown / persistence / rejection report.
+## Step 6 — duplicate / cooldown / persistence / rejection report
+
+- `signal_memory.py` (rewritten) — persistent JSON store (`storage/signal_memory.json`, atomic replace) so duplicate suppression survives a restart. Adds per-symbol side/score/sent_at, `can_send()` returning an explicit reason (`cooldown_active`, `duplicate_signal_suppressed`, `previous_signal_expired`, `direction_reversal_allowed`, `minimum_hold_not_elapsed`), `cooldown_remaining_seconds`, `purge_expired`, idempotent delivery markers (`delivery_key` / `already_delivered` / `mark_delivered`), `status()`, and restart simulation via `reload_from_disk()`. Legacy API (`signal_exists`, `add_signal`, `remove_signal`, `clear_signals`, `total_signals`, `get_all_signals`) preserved.
+- `scheduler.py` — scan job purges expired entries, uses `can_send(symbol, side)` instead of a bare existence check, and wraps delivery in an idempotency key built from symbol + side + signal-candle timestamp so a Telegram retry cannot double-send. Memory is written only after a confirmed delivery.
+- `tradingview_bridge.py` — backup delivery path uses the same shared memory and delivery keys, so an Angel→TradingView failover cannot repeat a signal.
+- `autoscan.py` — no longer records signals before delivery (that caused signals to be swallowed); it now only filters with `can_send`.
+- `rejection_log.py` (new) — structured JSONL rejection log with size-based rotation (`REJECTION_LOG_MAX_BYTES`, `REJECTION_LOG_BACKUPS`) and recursive secret redaction (key-name based plus OTP / base32 TOTP / Telegram-token / JWT patterns).
+- `rejection_report.py` (new) — truthful report grouped by IST trading day from real records only; marks itself INCOMPLETE when fewer trading days exist and states `NO REJECTION DATA RECORDED YET` for an empty log. Never estimates.
+- `scanner.py` — every rejection is also written to the structured rejection log; a closed market records one `market_closed` rejection per watchlist symbol.
+- `market_session.py` — `is_trading_day()` now accepts a plain date as well as a datetime.
+- `config.py` / `.env.example` — `SIGNAL_COOLDOWN_MINUTES=30`, `SIGNAL_EXPIRY_MINUTES=120` plus the Step 5 thresholds documented.
+- `tests/test_duplicate_cooldown.py` (new, 21 tests) — duplicate suppression, cooldown window, expiry release, reversal only after minimum hold, restart during cooldown, purge, delivery idempotency across restart, failover duplicate prevention, repeated scheduler passes, log structure, secret redaction, rotation, report incompleteness/completeness/empty/weekend handling, single-instance lock and scan-lock assertions.
+
+Real rejection report status: only 1 trading day of real records exists in this workspace (all `market_closed`, because no live market session has been observed here). The 5–6 trading-day report will remain marked INCOMPLETE until the bot runs through real sessions — no data has been invented.
+
+Current step: 7 — scanner → Telegram full path.
 Blockers: no live Angel credentials in the workspace (Step 2/10 evidence is unit-level); GitHub push authorization unconfirmed; no Windows/VPS access for Step 9/10 live verification.

@@ -1,10 +1,7 @@
 import logging
 
 from scanner import scan_market
-from signal_memory import (
-    signal_exists,
-    add_signal,
-)
+from signal_memory import can_send, purge_expired
 
 LOGGER = logging.getLogger("shivay.autoscan")
 
@@ -16,6 +13,8 @@ LOGGER = logging.getLogger("shivay.autoscan")
 def auto_scan():
 
     try:
+
+        purge_expired()
 
         signals = scan_market()
 
@@ -31,12 +30,12 @@ def auto_scan():
             if not symbol:
                 continue
 
-            # પહેલેથી મોકલાયેલ Signal Skip
-            if signal_exists(symbol):
+            # પહેલેથી મોકલાયેલ / cooldown માં હોય તે Signal Skip.
+            # Delivery પછી જ signal memory માં નોંધાય છે, અહીં નહીં.
+            allowed, reason = can_send(symbol, trade.get("side"))
+            if not allowed:
+                LOGGER.info("Auto scan skipped %s: %s", symbol, reason)
                 continue
-
-            # Save Signal
-            add_signal(symbol)
 
             fresh_signals.append(trade)
 

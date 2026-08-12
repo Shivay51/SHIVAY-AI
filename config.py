@@ -153,6 +153,10 @@ CHANDELIER_CONFIRMATION_MAX_SECONDS = max(
 )
 CHANDELIER_MAX_ENTRY_TRAVEL_ATR = max(0.1, _environment_float("CHANDELIER_MAX_ENTRY_TRAVEL_ATR", default=0.75))
 MIN_HOLD_MINUTES = max(1, _environment_int("MIN_HOLD_MINUTES", default=10))
+# Duplicate suppression: one signal per symbol per cooldown window, expiring
+# afterwards so a fresh setup is not blocked forever.
+SIGNAL_COOLDOWN_MINUTES = max(MIN_HOLD_MINUTES, _environment_int("SIGNAL_COOLDOWN_MINUTES", default=30))
+SIGNAL_EXPIRY_MINUTES = max(SIGNAL_COOLDOWN_MINUTES, _environment_int("SIGNAL_EXPIRY_MINUTES", default=120))
 ACTIONABLE_SCORE = max(50, min(_environment_int("ACTIONABLE_SCORE", default=70), 95))
 PREMIUM_SCORE = max(ACTIONABLE_SCORE + 5, _environment_int("PREMIUM_SCORE", default=90))
 SAFE_SCORE = max(ACTIONABLE_SCORE, min(_environment_int("SAFE_SCORE", default=80), PREMIUM_SCORE))

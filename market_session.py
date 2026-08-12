@@ -47,9 +47,12 @@ def now_ist() -> datetime:
     return datetime.now(IST)
 
 
-def is_trading_day(moment: datetime | None = None) -> bool:
-    moment = (moment or now_ist()).astimezone(IST)
-    return moment.weekday() < 5 and moment.date() not in holidays()
+def is_trading_day(moment: datetime | date | None = None) -> bool:
+    if isinstance(moment, date) and not isinstance(moment, datetime):
+        day = moment
+    else:
+        day = (moment or now_ist()).astimezone(IST).date()
+    return day.weekday() < 5 and day not in holidays()
 
 
 def is_market_open(segment: str | None = None, moment: datetime | None = None) -> bool:
