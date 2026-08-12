@@ -30,7 +30,8 @@ Provider architecture: `angelone_primary` → `tradingview_alert_bridge` → `NO
 | After Step 5 (scanner / Chandelier / symmetry) | 211 passed, 0 failed |
 | After Step 6 (duplicate / cooldown / rejection log) | 232 passed, 0 failed |
 | After Step 7 (Telegram delivery path) | 245 passed, 0 failed |
-| After Step 8 (tests + security audit) | **254 passed, 0 failed, 0 skipped** |
+| After Step 8 (tests + security audit) | 254 passed, 0 failed |
+| After Step 9 (Windows one-click runtime) | **267 passed, 0 failed, 0 skipped** |
 
 Both baseline failures fixed:
 - `tests/test_master_completion.py::test_startup_card_is_single_clean_signals_only_message`
@@ -101,5 +102,13 @@ Real rejection report status: only 1 trading day of real records exists in this 
 - `dry_run.py` (new) — offline end-to-end dry run with no network, no orders and no Telegram transmission. **17/17 checks pass**: exactly two providers with Angel first, no third fallback, no order methods on any provider, futures contract resolution (NIFTY/BANKNIFTY/GOLD/SILVER), stale-data and clock-skew rejection, market-session gate, IGNORE never deliverable, duplicate suppression, signal memory surviving restart, admin-only delivery, all required message fields, sanitisation of URLs/tokens/tracebacks, delivery idempotency, 5-minute non-overlapping single-instance scheduler, signals-only safety flags, and a clean security audit.
 - `tests/test_security_audit.py` (new, 9 tests) — keeps the audit and the dry run green in CI, and proves the secret detector still detects a planted secret (so a passing audit cannot be a false negative).
 
-Current step: 9 — one-click Windows update/start.
+## Step 9 — one-click Windows update/start
+
+- `SHIVAY_CONTROL.ps1` (rewritten) — six actions: `Start`, `Stop`, `Restart`, `Status`, `Update`, `Check`. Prefers `.venv\Scripts\python.exe`. `Start` is idempotent (does nothing if the verified process is already running) and refuses to start when the pre-flight check fails. `Stop` targets only a process whose executable is `python.exe`/`pythonw.exe` **and** whose command line points at `bot.py`, resolved through the PID in `.shivay_ai.lock`; no `taskkill`, no `Stop-Process -Name python`, so unrelated Python processes are never touched. Stale locks are released safely with retries.
+- `Update` — saves the current SHA to `.shivay_last_good_sha`, stashes local changes (including untracked files) before pulling, pulls `--ff-only` so local history is never rewritten, restores the stash, reinstalls `requirements.txt`, runs the full test suite, re-runs the pre-flight check, and only then restarts. If tests or the pre-flight fail, the bot is **not** restarted and explicit rollback commands are printed (`git reset --hard <saved sha>` + `RESTART_SHIVAY.bat`).
+- `runtime_check.py` (new) — validates the six required settings (`TELEGRAM_BOT_TOKEN`, `ADMIN_ID`, `ANGEL_API_KEY`, `ANGEL_CLIENT_CODE`, `ANGEL_MPIN`, `ANGEL_TOTP_SECRET`) plus optional ones, reads `.env` without exporting values, and reports each as `SET (value hidden)` or `MISSING` — a value is never printed in text or JSON output. Also reports the signals-only safety state, admin-only delivery, scan interval and (`--health`) lock-file/PID/process state. Exit code 0 = ready, 1 = not ready.
+- Launchers: `START_SHIVAY.bat`, `RESTART_SHIVAY.bat`, `STATUS_SHIVAY.bat`, `STOP_SHIVAY.bat` (new), `UPDATE_SHIVAY.bat` (new), `CHECK_SHIVAY.bat` (new) — each path-independent (`%~dp0`) and forwarding the control script's exit code.
+- `tests/test_windows_runtime.py` (new, 13 tests) — launcher presence/wiring, all six actions, start idempotency and duplicate-process prevention, correct-process-only stop, local-change preservation + test gate on update, rollback instructions, pre-flight before start, ready/not-ready detection, and two leak tests proving no setting value appears in either text or JSON output.
+
+Current step: 10 — deployment / live readiness verification.
 Blockers: no live Angel credentials in the workspace (Step 2/10 evidence is unit-level); GitHub push authorization unconfirmed; no Windows/VPS access for Step 9/10 live verification.
