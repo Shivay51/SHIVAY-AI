@@ -14,12 +14,12 @@ Baseline main commit: `f4b2baa` (118 passed, 2 failed)
 | 2 | Angel provider completion | DONE |
 | 3 | TradingView-only emergency backup | DONE |
 | 4 | Provider manager, instruments, freshness and cache | DONE |
-| 5 | Scanner, Chandelier and BUY/SELL rules | IN PROGRESS |
-| 6 | Score, risk, duplicate, cooldown and stale protections | PENDING |
-| 7 | Five-to-six-day rejection reporting/logging | PENDING |
-| 8 | Scheduler-to-Telegram full-path audit | PENDING |
-| 9 | Tests, security checks and one-click Windows scripts | PENDING |
-| 10 | Final deployment-readiness audit and pull request | PENDING |
+| 5 | Scanner, Chandelier and BUY/SELL rules | DONE |
+| 6 | Score, risk, duplicate, cooldown and stale protections | DONE |
+| 7 | Five-to-six-day rejection reporting/logging | DONE |
+| 8 | Scheduler-to-Telegram full-path audit | DONE |
+| 9 | Tests, security checks and one-click Windows scripts | DONE |
+| 10 | Final deployment-readiness audit and pull request | IN PROGRESS |
 
 ## Step 1 — GitHub Actions runtime (DONE)
 * `.github/workflows/tests.yml` — installs requirements, `compileall`, runs `pytest tests`.
@@ -67,3 +67,63 @@ Angel and is never used while Angel is healthy.
 * `tests/test_runtime_architecture.py` — 16 tests covering registration,
   failover order, no-signal behaviour, stale/delayed rejection and COMEX-as-MCX
   contract spoofing.
+
+## Step 5 — Scanner, Chandelier and BUY/SELL rules (DONE)
+* Verified the Angel payload satisfies the engine contract end to end: FULL
+  quotes plus 5m candle series supply `open/high/low/close/volume`, `candles`
+  and `interval_minutes`, so `score.py`, `chandelier_exit.py`,
+  `core/buy_engine.py` and `core/sell_engine.py` receive every field they read.
+* `multitimeframe.py` now aggregates higher timeframes from candle timestamps
+  instead of positional slicing. Positional resampling merged bars across
+  overnight and holiday gaps, which distorted 15m/30m/60m direction — the exact
+  inputs the BUY/SELL engines gate on. Positional resampling remains as a
+  fallback when a payload has no timestamped candles.
+* `tests/test_timeframe_aggregation.py` — 5 tests covering bucket counts across
+  multi-session data, bucket-close correctness, and the fallback path.
+
+## Step 6 — Duplicate, cooldown and stale protections (DONE)
+* `signal_memory.py` rewritten. It was a bare in-process `set`, so a symbol
+  could never re-signal until the daily cleanup ran, and every entry vanished on
+  restart (allowing an immediate duplicate after a crash). It now stores
+  per-symbol timestamps, honours `SIGNAL_REPEAT_COOLDOWN_MINUTES` (default 45),
+  normalises symbol case/whitespace, persists to a git-ignored JSON side-file,
+  and exposes `cooldown_remaining()` and `snapshot()`.
+* `scheduler._delivery_allowed()` — final gate immediately before delivery,
+  re-checking freshness, rejecting any non-signal-capable/delayed payload, and
+  enforcing the repeat cooldown. Every block is journalled with its reason.
+* `tests/test_signal_protections.py` — 11 tests.
+
+## Step 7 — Five-to-six-session rejection reporting (DONE)
+* `rejection_report.py` — groups journalled `REJECTION` events by IST session
+  date and by pipeline stage (DATA / FRESHNESS / STRATEGY / CHANDELIER / RISK /
+  COOLDOWN / OTHER) over a 5–30 session window (default 6). Reports the dominant
+  reason and its share, per-session signal-versus-rejection counts, top rejected
+  symbols, and flags a silent pipeline where every candidate was rejected.
+* `/rejections [days]` and `/cooldowns` Telegram commands, registered in
+  `startup.py` and listed in `/help`.
+* The end-of-day scheduler job delivers the digest to administrators.
+* `tests/test_rejection_report.py` — 20 tests.
+
+## Step 8 — Scheduler-to-Telegram full-path audit (DONE)
+* `tests/test_scheduler_telegram_path.py` — walks the real `_scan_job` path:
+  scan → rank → delivery gate → Telegram sender. Proves fresh BUY and SELL
+  candidates are delivered through the correct sender, that delivery arms the
+  cooldown, and that stale, delayed-provider, duplicate and missing-snapshot
+  candidates are all blocked with a journalled reason. A source-level assertion
+  keeps the gate ahead of sender selection on the only send path.
+
+## Step 9 — Tests, security checks and Windows scripts (DONE)
+* Both baseline failures fixed at the root cause:
+  `admin.notify_admins()` silently delivered nothing when no admin was
+  configured, so startup and recovery alerts were lost. It now resolves
+  recipients via `ADMIN_IDS` → `ADMIN_ID`/`CHAT_ID` → `TELEGRAM_CHAT_ID`, queues
+  the message instead of dropping it when nothing is configured, and warns.
+  `bot.on_startup` sends exactly one startup card reporting BOT / DATA ENGINE /
+  SCANNER / SCHEDULER state and `MODE: SIGNALS ONLY`, with no provider or API
+  internals; `startup.py` exposes the `data_engine_ready` flag it reads.
+* `SHIVAY_CONTROL.ps1` gained `Stop` and `Logs` actions, a `.env` and dependency
+  precheck before launch, and stops only the lock-file PID — never by process
+  name. `STOP_SHIVAY.bat` and `LOGS_SHIVAY.bat` added.
+* `SIGNAL_REPEAT_COOLDOWN_MINUTES` documented in `.env.example`.
+* Security audit passes on every commit: no committed secrets, no live-order
+  code path in any runtime module.
