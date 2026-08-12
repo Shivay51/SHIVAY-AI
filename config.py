@@ -148,6 +148,8 @@ CHANDELIER_CONFIRMATION_SECONDS = max(45, _environment_int("CHANDELIER_CONFIRMAT
 ENTRY_CONFIRMATION_CANDLES = max(1, _environment_int("ENTRY_CONFIRMATION_CANDLES", default=1))
 ENTRY_BREAK_BUFFER_ATR = max(0.0, _environment_float("ENTRY_BREAK_BUFFER_ATR", default=0.05))
 SIGNAL_MAX_AGE_CANDLES = max(1, _environment_int("SIGNAL_MAX_AGE_CANDLES", default=2))
+# Minutes a symbol stays blocked from re-signalling after a delivered signal.
+SIGNAL_REPEAT_COOLDOWN_MINUTES = max(0, _environment_int("SIGNAL_REPEAT_COOLDOWN_MINUTES", default=45))
 
 
 # ADMIN_ID is intentionally sourced at runtime; CHAT_ID remains a backward-compatible
