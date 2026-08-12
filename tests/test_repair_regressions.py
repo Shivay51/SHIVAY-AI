@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import admin
 import commands
@@ -19,8 +20,21 @@ class AdminNotificationTests(unittest.IsolatedAsyncioTestCase):
         class Application:
             bot = Bot()
 
-        await admin.notify_admins(Application(), "🔐 SHIVAY AI ADMIN\n\n🟢 SHIVAY AI ACTIVE")
+        with patch("admin._admin_ids", return_value={1}):
+            delivered = await admin.notify_admins(Application(), "🔐 SHIVAY AI ADMIN\n\n🟢 SHIVAY AI ACTIVE")
+        self.assertEqual(delivered, 1)
         self.assertEqual(sent[0], "🔐 SHIVAY AI ADMIN\n\n🟢 SHIVAY AI ACTIVE")
+
+    async def test_no_admin_configured_fails_closed(self) -> None:
+        class Bot:
+            async def send_message(self, chat_id: int, text: str) -> None:
+                raise AssertionError("no admin is configured")
+
+        class Application:
+            bot = Bot()
+
+        with patch("admin._admin_ids", return_value=set()):
+            self.assertEqual(await admin.notify_admins(Application(), "test"), 0)
 
 
 class CommandsTests(unittest.TestCase):

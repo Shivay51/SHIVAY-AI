@@ -92,7 +92,8 @@ class GrowwProviderTests(unittest.TestCase):
         self.assertEqual(provider.get_historical_candles("GOLD", "15m"), [])
 
     def test_groww_is_supported_and_unconfigured_adapter_is_unavailable(self):
-        self.assertIn("groww_primary", ProviderManager.DEFAULT_PRIORITY)
+        self.assertNotIn("groww_primary", ProviderManager.DEFAULT_PRIORITY)
+        self.assertIn("groww_primary", ProviderManager.ARCHIVED_PROVIDERS)
         with patch.dict(os.environ, {"ENABLE_GROWW": "false", "GROWW_ACCESS_TOKEN": ""}, clear=False):
             provider = GrowwProvider(_Session())
         self.assertFalse(provider.available)

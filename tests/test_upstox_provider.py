@@ -77,7 +77,8 @@ class UpstoxProviderTests(unittest.TestCase):
         self.assertFalse(any(word in path.lower() for path in session.paths for word in ("order", "modify", "cancel")))
 
     def test_upstox_is_supported(self):
-        self.assertIn("upstox_primary", ProviderManager.DEFAULT_PRIORITY)
+        self.assertNotIn("upstox_primary", ProviderManager.DEFAULT_PRIORITY)
+        self.assertIn("upstox_primary", ProviderManager.ARCHIVED_PROVIDERS)
 
     def test_unconfigured_provider_fails_closed(self):
         with patch.dict(os.environ, {"ENABLE_UPSTOX": "false", "UPSTOX_ACCESS_TOKEN": ""}, clear=False):

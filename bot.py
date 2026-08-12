@@ -48,6 +48,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 async def on_startup(application: Application) -> None:
     try:
         state = await lifecycle.startup(application)
+        from provider_manager import assert_production_providers
+        active = assert_production_providers()
         await auto_recovery.start_auto_recovery(application)
         await cleanup.start_cleanup_scheduler()
         from tradingview_webhook import start_tradingview_webhook, startup_self_check
@@ -57,10 +59,18 @@ async def on_startup(application: Application) -> None:
         application.bot_data["shivay_enabled"] = True
         try:
             import admin
-            await admin.notify_admins(application, "🔱 SHIVAY AI PRO\n✅ BOT ACTIVE\n🎯 MODE: SIGNALS ONLY")
+            await admin.notify_admins(
+                application,
+                "🔱 SHIVAY AI PRO\n"
+                "✅ BOT ACTIVE\n"
+                "📡 DATA ENGINE: ACTIVE\n"
+                "🔍 SCANNER: ACTIVE\n"
+                "⏱️ SCHEDULER: ACTIVE\n"
+                "🎯 MODE: SIGNALS ONLY",
+            )
         except Exception:
             LOGGER.warning("Startup admin notification was not delivered")
-        LOGGER.info("SHIVAY AI startup completed: %s", state.get("state", "READY"))
+        LOGGER.info("SHIVAY AI startup completed: %s (%s)", state.get("state", "READY"), len(active))
     except Exception:
         LOGGER.exception("SHIVAY AI could not complete critical startup")
         await cleanup.stop_cleanup_scheduler()

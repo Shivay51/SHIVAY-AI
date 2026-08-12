@@ -175,9 +175,11 @@ PROVIDER_HEALTH_INTERVAL = max(60, _environment_int("PROVIDER_HEALTH_INTERVAL", 
 MAX_SIGNAL_DATA_DELAY_SECONDS = max(30, _environment_int("MAX_SIGNAL_DATA_DELAY_SECONDS", default=180))
 PROVIDER_PRIORITY = tuple(
     item.strip().lower()
-    for item in os.getenv(
-        "PROVIDER_PRIORITY",
-        "groww_primary,nse_temporary,mcx_temporary,upstox_primary,tradingview_alert_bridge,dhan_primary,shoonya_primary,truedata_primary,gdfl_primary,fyers_primary,angelone_primary,market_hub,yahoo_emergency",
-    ).split(",")
+    for item in os.getenv("PROVIDER_PRIORITY", "angelone_primary,tradingview_alert_bridge").split(",")
     if item.strip()
 )
+# Production runtime allows exactly two providers: Angel One primary and the
+# authenticated TradingView bridge as the only emergency backup.
+PRODUCTION_PROVIDERS = ("angelone_primary", "tradingview_alert_bridge")
+NO_FRESH_DATA_DECISION = "NO FRESH DATA / NO SIGNAL"
+ANGEL_INSTRUMENT_REFRESH_HOUR = max(0, min(23, _environment_int("ANGEL_INSTRUMENT_REFRESH_HOUR", default=8)))

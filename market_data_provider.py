@@ -12,7 +12,7 @@ from typing import Any, Mapping, Protocol, runtime_checkable
 
 from data import SYMBOLS
 from data_quality import assess_market_data
-from instrument_master import list_instruments, refresh_instrument_master, resolve_verified_instrument
+from instrument_master import list_instruments, refresh_instrument_master, resolve_verified_instrument  # noqa: F401
 from provider_manager import get_provider_manager, get_provider_status
 
 
@@ -85,7 +85,8 @@ class VerifiedMarketDataProvider:
         return {
             "active_provider": status.get("selected_primary"),
             "verified_providers": list(status.get("verified_providers") or []),
-            "context_only_provider": "yahoo_emergency",
+            "context_only_provider": None,
+            "backup_provider": "tradingview_alert_bridge",
             "mode": "VERIFIED" if status.get("selected_primary") else "NO VERIFIED DATA",
             "health": status.get("health", {}),
         }
@@ -156,8 +157,9 @@ def get_live_price(symbol: str) -> float | None:
     value = get_quote(symbol)
     return round(float(value["price"]), 2) if value else None
 def get_emergency_market_context(symbol: str) -> dict[str, Any] | None:
-    try: return get_provider_manager().yahoo.get_market_data(symbol)
-    except Exception: return None
+    """No unapproved provider may supply data. Production has Angel One and the
+    authenticated TradingView backup only; anything else returns nothing."""
+    return None
 def refresh_market(symbols: list[str] | None = None) -> dict[str, dict[str, Any]]:
     return get_provider_manager().get_verified_many(symbols or list(SYMBOLS), period="5d", interval="5m")
 def get_batch_market_data(symbols: list[str]) -> dict[str, dict[str, Any]]: return refresh_market(symbols)

@@ -172,7 +172,9 @@ class ContractRiskLifecycleTests(unittest.TestCase):
 
     def test_provider_priority(self):
         from provider_manager import ProviderManager
-        self.assertEqual(ProviderManager.DEFAULT_PRIORITY[0],"tradingview_alert_bridge");self.assertEqual(ProviderManager.DEFAULT_PRIORITY[-1],"yahoo_emergency")
+        self.assertEqual(ProviderManager.DEFAULT_PRIORITY,("angelone_primary","tradingview_alert_bridge"))
+        self.assertEqual(ProviderManager.DEFAULT_PRIORITY[-1],"tradingview_alert_bridge")
+        self.assertIn("yahoo_emergency",ProviderManager.ARCHIVED_PROVIDERS)
     def test_no_order_surface(self):
         from tradingview_bridge import TradingViewBridgeProvider
         provider=TradingViewBridgeProvider();self.assertFalse(any(hasattr(provider,x) for x in ("place_order","modify_order","cancel_order")))

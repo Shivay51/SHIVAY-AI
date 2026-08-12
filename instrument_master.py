@@ -9,15 +9,8 @@ _SHOONYA_MASTER_PROVIDER: Any = None
 _TRIAL_MASTER_PROVIDERS: list[Any] | None = None
 
 def _trial_master_providers() -> list[Any]:
-    global _TRIAL_MASTER_PROVIDERS
-    with _LOCK:
-        if _TRIAL_MASTER_PROVIDERS is None:
-            from groww_provider import GrowwProvider
-            from upstox_provider import UpstoxProvider
-            from truedata_provider import TrueDataProvider
-            from gdfl_provider import GDFLProvider
-            _TRIAL_MASTER_PROVIDERS = [GrowwProvider(), UpstoxProvider(), TrueDataProvider(), GDFLProvider()]
-        return _TRIAL_MASTER_PROVIDERS
+    """Archived adapters are never used for instrument resolution any more."""
+    return []
 
 
 def _shoonya_master_provider() -> Any:
@@ -52,6 +45,12 @@ def current_expiry(symbol: str, on_date: date|None=None)->str|None:
     item=resolve_instrument(symbol); return item.get("expiry") if item else None
 def list_instruments()->list[dict[str,Any]]: return [resolve_instrument(k) for k in sorted(set(INDEXES)|set(GLOBAL)|set(_configured()))]
 def resolve_verified_instrument(symbol:str)->dict[str,Any]|None:
+    """Angel One official scrip master is the only verified contract source."""
+    try:
+        import angel_instruments
+        value=angel_instruments.resolve(symbol)
+        if value and value.get("verified"):return value
+    except Exception:LOGGER.warning("Angel instrument resolution unavailable for %s",symbol)
     for provider in _trial_master_providers():
         if not provider.available:continue
         try:
@@ -63,6 +62,11 @@ def resolve_verified_instrument(symbol:str)->dict[str,Any]|None:
         return value if value and value.get("verified") else None
     except Exception:return None
 def refresh_instrument_master()->dict[str,Any]:
+    try:
+        import angel_instruments
+        value=angel_instruments.refresh()
+        if value.get("count"):return {"supported":True,"count":int(value["count"]),"source":"angel_instrument_master","instruments":{}}
+    except Exception:LOGGER.warning("Angel instrument master refresh unavailable")
     enabled=[provider for provider in _trial_master_providers() if provider.available]
     if enabled:
         resolved={}
