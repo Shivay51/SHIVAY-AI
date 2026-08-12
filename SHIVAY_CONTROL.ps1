@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Start", "Restart", "Status")]
+    [ValidateSet("Start", "Stop", "Restart", "Status", "Logs")]
     [string]$Action
 )
 
@@ -55,6 +55,44 @@ function Remove-StaleLock {
     }
 }
 
+function Test-Prerequisites {
+    if (-not (Test-Path -LiteralPath $botFile)) {
+        throw "bot.py was not found next to this script."
+    }
+    $envFile = Join-Path $projectRoot ".env"
+    if (-not (Test-Path -LiteralPath $envFile)) {
+        throw "No .env file was found. Copy .env.example to .env and fill in your credentials."
+    }
+    $python = (Get-Command python.exe -ErrorAction Stop).Source
+    $probe = & $python -c "import telegram, dotenv, requests" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Installing Python dependencies (first run only)..."
+        $requirements = Join-Path $projectRoot "requirements.txt"
+        if (Test-Path -LiteralPath $requirements) {
+            & $python -m pip install --quiet --disable-pip-version-check -r $requirements
+            if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed. Run: python -m pip install -r requirements.txt" }
+        }
+        else {
+            throw "Required packages are missing and requirements.txt was not found. Details: $probe"
+        }
+    }
+    return $python
+}
+
+function Stop-Shivay {
+    $running = Get-ShivayProcess
+    if ($null -eq $running) {
+        Remove-StaleLock
+        Write-Host "SHIVAY AI is not running."
+        return
+    }
+    # Targeted by PID only: never terminates unrelated Python processes.
+    Stop-Process -Id $running.ProcessId
+    Wait-Process -Id $running.ProcessId -Timeout 20 -ErrorAction SilentlyContinue
+    Remove-StaleLock
+    Write-Host "SHIVAY AI stopped (PID $($running.ProcessId))."
+}
+
 function Start-Shivay {
     $running = Get-ShivayProcess
     if ($null -ne $running) {
@@ -63,7 +101,7 @@ function Start-Shivay {
     }
     Remove-StaleLock
     New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
-    $python = (Get-Command python.exe -ErrorAction Stop).Source
+    $python = Test-Prerequisites
     $started = Start-Process -FilePath $python -ArgumentList @($botFile) -WorkingDirectory $projectRoot `
         -WindowStyle Hidden -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile -PassThru
     Start-Sleep -Seconds 3
@@ -81,13 +119,25 @@ switch ($Action) {
         Write-Host "SHIVAY AI STOPPED"
         exit 1
     }
-    "Restart" {
-        $running = Get-ShivayProcess
-        if ($null -ne $running) {
-            Stop-Process -Id $running.ProcessId
-            Wait-Process -Id $running.ProcessId -Timeout 15 -ErrorAction SilentlyContinue
+    "Stop" {
+        Stop-Shivay
+        exit 0
+    }
+    "Logs" {
+        if (-not (Test-Path -LiteralPath $stdoutFile)) {
+            Write-Host "No log file yet at logs\bot_stdout.log."
+            exit 1
         }
-        Remove-StaleLock
+        Get-Content -LiteralPath $stdoutFile -Tail 60
+        if (Test-Path -LiteralPath $stderrFile) {
+            Write-Host ""
+            Write-Host "--- errors ---"
+            Get-Content -LiteralPath $stderrFile -Tail 30
+        }
+        exit 0
+    }
+    "Restart" {
+        Stop-Shivay
         Start-Shivay
     }
     "Start" { Start-Shivay }
