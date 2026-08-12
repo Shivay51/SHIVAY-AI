@@ -55,9 +55,31 @@ async def on_startup(application: Application) -> None:
         check = await startup_self_check()
         application.bot_data["tradingview_webhook_health"] = check
         application.bot_data["shivay_enabled"] = True
+        # Single startup card. Subsystem lines start ACTIVE and are downgraded
+        # only when startup reports that subsystem as not ready. No provider,
+        # source or API internals are ever exposed to Telegram.
+        report = state if isinstance(state, dict) else {}
+        lines = [
+            "🔱 SHIVAY AI PRO",
+            "✅ BOT ACTIVE",
+            "📊 DATA ENGINE: ACTIVE",
+            "🔎 SCANNER: ACTIVE",
+            "⏱️ SCHEDULER: ACTIVE",
+            "🎯 MODE: SIGNALS ONLY",
+        ]
+        if report.get("data_engine_ready") is False:
+            lines[2] = "📊 DATA ENGINE: WAITING FOR FRESH DATA"
+        if report.get("scanner_ready") is False:
+            lines[3] = "🔎 SCANNER: STANDBY"
+        if report.get("scheduler_ready") is False:
+            lines[4] = "⏱️ SCHEDULER: STANDBY"
+        card = "\n".join(lines)
+        application.bot_data["startup_card"] = card
         try:
             import admin
-            await admin.notify_admins(application, "🔱 SHIVAY AI PRO\n✅ BOT ACTIVE\n🎯 MODE: SIGNALS ONLY")
+            delivered = await admin.notify_admins(application, card)
+            if not delivered:
+                LOGGER.warning("Startup card had no reachable admin recipient")
         except Exception:
             LOGGER.warning("Startup admin notification was not delivered")
         LOGGER.info("SHIVAY AI startup completed: %s", state.get("state", "READY"))
