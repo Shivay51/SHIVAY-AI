@@ -14,7 +14,7 @@ Provider architecture: `angelone_primary` → `tradingview_alert_bridge` → `NO
 | 4 | Provider manager / cache / freshness | DONE |
 | 5 | Scanner / Chandelier / BUY-SELL | DONE |
 | 6 | Duplicate / cooldown / rejection report | DONE |
-| 7 | Scanner → Telegram full path | PENDING |
+| 7 | Scanner → Telegram full path | DONE |
 | 8 | All tests + security audit | PENDING |
 | 9 | Windows one-click runtime | PENDING |
 | 10 | Deployment / live readiness | PENDING |
@@ -28,7 +28,8 @@ Provider architecture: `angelone_primary` → `tradingview_alert_bridge` → `NO
 | After Step 3 (backup role hardening) | 162 passed, 0 failed |
 | After Step 4 (session/cache/freshness gate) | 186 passed, 0 failed |
 | After Step 5 (scanner / Chandelier / symmetry) | 211 passed, 0 failed |
-| After Step 6 (duplicate / cooldown / rejection log) | **232 passed, 0 failed, 0 skipped** |
+| After Step 6 (duplicate / cooldown / rejection log) | 232 passed, 0 failed |
+| After Step 7 (Telegram delivery path) | **245 passed, 0 failed, 0 skipped** |
 
 Both baseline failures fixed:
 - `tests/test_master_completion.py::test_startup_card_is_single_clean_signals_only_message`
@@ -83,5 +84,12 @@ Step 3 — TradingView backup hardening (webhook auth, replay protection, comple
 
 Real rejection report status: only 1 trading day of real records exists in this workspace (all `market_closed`, because no live market session has been observed here). The 5–6 trading-day report will remain marked INCOMPLETE until the bot runs through real sessions — no data has been invented.
 
-Current step: 7 — scanner → Telegram full path.
+## Step 7 — scanner → Telegram full path
+
+- `telegram_service.py` — new `sanitize()` strips URLs, `t.me` links, stack-trace fragments and credential-shaped values (OTP, base32 TOTP, bot token, JWT) from every outgoing message; applied inside `_send` so nothing bypasses it. New `authorized_recipients()` enforces admin-only signal delivery (`SIGNAL_ADMIN_ONLY`, default on) and logs every rejected recipient to the structured rejection log. New `_deliver_once()` retries with linear backoff (`TELEGRAM_SEND_ATTEMPTS`, `TELEGRAM_RETRY_BACKOFF_SECONDS`) and the message key is only acknowledged after a real delivery, so a retry cannot duplicate a message.
+- `telegram_service._signal_text` — final message now carries every required field: SHIVAY AI PRO header, market, futures contract, BUY/SELL direction, verified current price, entry zone, stop loss, T1/T2/T3, score, SAFE/RISKY (from the Step 5 classifier, with a PREMIUM 90+ marker), Chandelier signal + confirmation, signal-candle high/low, volume, OI, risk:reward, trade type (INTRADAY/OVERNIGHT), signal timestamp, data freshness with age, valid-until, contract expiry and the top three short reasons.
+- `config.py` / `.env.example` — `SIGNAL_ADMIN_ONLY=true`, `TELEGRAM_SEND_ATTEMPTS=3`, `TELEGRAM_RETRY_BACKOFF_SECONDS=1.5`.
+- `tests/test_telegram_path.py` (new, 13 tests) — required-field coverage, PREMIUM/RISKY honesty, no URLs/credentials/traces, admin-only gating, unauthorized rejection logging, retry-then-success, attempt budget exhaustion, acknowledged messages never resent, sanitisation of transmitted text, 5-minute non-overlapping scheduler assertions, and an end-to-end `_scan_job` idempotency test proving the same signal candle is delivered exactly once across two scheduler passes.
+
+Current step: 8 — fix all tests + security audit.
 Blockers: no live Angel credentials in the workspace (Step 2/10 evidence is unit-level); GitHub push authorization unconfirmed; no Windows/VPS access for Step 9/10 live verification.

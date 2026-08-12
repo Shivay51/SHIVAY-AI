@@ -186,7 +186,7 @@ class UnicodeTransmissionTests(unittest.IsolatedAsyncioTestCase):
         class Bot:
             async def send_message(self,chat_id,text):captured.append(text)
         class App:bot=Bot()
-        with patch("telegram_service.recipients",return_value=[{"id":1}]):
+        with patch("telegram_service.recipients",return_value=[{"id":1}]),patch("telegram_service._admin_ids",return_value={1}):
             sent=await telegram_service._send(App(),("UNICODE",id(self)),"🔱 SHIVAY AI PRO\n\nWAIT")
         self.assertTrue(sent);self.assertEqual(captured,["🔱 SHIVAY AI PRO\n\nWAIT"]);self.assertFalse(captured[0].startswith("??"))
 

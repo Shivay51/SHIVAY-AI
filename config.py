@@ -157,6 +157,11 @@ MIN_HOLD_MINUTES = max(1, _environment_int("MIN_HOLD_MINUTES", default=10))
 # afterwards so a fresh setup is not blocked forever.
 SIGNAL_COOLDOWN_MINUTES = max(MIN_HOLD_MINUTES, _environment_int("SIGNAL_COOLDOWN_MINUTES", default=30))
 SIGNAL_EXPIRY_MINUTES = max(SIGNAL_COOLDOWN_MINUTES, _environment_int("SIGNAL_EXPIRY_MINUTES", default=120))
+# Trading signals are private: they are delivered to configured administrators
+# only. Any other chat id is rejected and logged.
+SIGNAL_ADMIN_ONLY = os.getenv("SIGNAL_ADMIN_ONLY", "true").strip().lower() not in {"0", "false", "no", "off"}
+TELEGRAM_SEND_ATTEMPTS = max(1, _environment_int("TELEGRAM_SEND_ATTEMPTS", default=3))
+TELEGRAM_RETRY_BACKOFF_SECONDS = max(0.1, _environment_float("TELEGRAM_RETRY_BACKOFF_SECONDS", default=1.5))
 ACTIONABLE_SCORE = max(50, min(_environment_int("ACTIONABLE_SCORE", default=70), 95))
 PREMIUM_SCORE = max(ACTIONABLE_SCORE + 5, _environment_int("PREMIUM_SCORE", default=90))
 SAFE_SCORE = max(ACTIONABLE_SCORE, min(_environment_int("SAFE_SCORE", default=80), PREMIUM_SCORE))

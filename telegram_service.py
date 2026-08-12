@@ -2,14 +2,24 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
+import config
+import rejection_log
 from audience_router import audience_for_signal, recipients
 
+LOGGER = logging.getLogger("shivay.telegram")
 IST = ZoneInfo("Asia/Kolkata")
 TELEGRAM_LIMIT = 4000
+_URL_PATTERN = re.compile(r"(?:https?://|www\.|t\.me/)\S+", re.IGNORECASE)
+_TRACEBACK_PATTERN = re.compile(
+    r"(traceback \(most recent call last\):?|file \"[^\"]+\", line \d+[^\n]*|at 0x[0-9a-f]+)",
+    re.IGNORECASE,
+)
 _sent_messages: set[Any] = set()
 _symbol_direction: dict[str, str] = {}
 _message_date = None
@@ -63,6 +73,73 @@ def _line(label: str, value: Any) -> str | None:
     return f"{label}: {value}" if value not in (None, "", [], ()) else None
 
 
+def sanitize(text: Any) -> str:
+    """Strip URLs, stack traces and any credential-like value from a message."""
+    value = str(text or "")
+    value = _URL_PATTERN.sub("[link removed]", value)
+    value = _TRACEBACK_PATTERN.sub("[details withheld]", value)
+    for pattern in rejection_log._SECRET_PATTERNS:
+        value = pattern.sub(rejection_log.REDACTED, value)
+    return value[:TELEGRAM_LIMIT]
+
+
+def _admin_ids() -> set[int]:
+    try:
+        import admin
+        return {int(value) for value in admin._admin_ids()}
+    except Exception:
+        ids = set()
+        for value in (getattr(config, "ADMIN_ID", 0), *getattr(config, "ADMIN_IDS", ())):
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                ids.add(number)
+        return ids
+
+
+def authorized_recipients(audience: str = "ALL") -> list[dict[str, Any]]:
+    """Signals are private: only configured administrators may receive them."""
+    users = recipients(audience)
+    if not getattr(config, "SIGNAL_ADMIN_ONLY", True):
+        return users
+    allowed = _admin_ids()
+    approved, rejected = [], []
+    for user in users:
+        try:
+            user_id = int(user["id"])
+        except (KeyError, TypeError, ValueError):
+            rejected.append(user)
+            continue
+        (approved if user_id in allowed else rejected).append(user)
+    if rejected:
+        LOGGER.info("Rejected %s unauthorized signal recipient(s)", len(rejected))
+        try:
+            rejection_log.record("TELEGRAM", "unauthorized_recipient",
+                                 {"count": len(rejected)}, stage="DELIVERY")
+        except Exception:
+            LOGGER.debug("Rejection log unavailable for delivery gate")
+    return approved
+
+
+async def _deliver_once(app: Any, user_id: int, text: str) -> bool:
+    attempts = max(1, int(getattr(config, "TELEGRAM_SEND_ATTEMPTS", 3)))
+    backoff = float(getattr(config, "TELEGRAM_RETRY_BACKOFF_SECONDS", 1.5))
+    for attempt in range(1, attempts + 1):
+        try:
+            await app.bot.send_message(chat_id=user_id, text=text)
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            LOGGER.warning("Telegram send attempt %s/%s failed: %s", attempt, attempts, type(error).__name__)
+            if attempt == attempts:
+                return False
+            await asyncio.sleep(backoff * attempt)
+    return False
+
+
 async def _send(app: Any, message_key: Any, text: str, audience: str = "ALL") -> bool:
     global _message_date, _sent_messages, _symbol_direction
     today = datetime.now(IST).date()
@@ -70,17 +147,18 @@ async def _send(app: Any, message_key: Any, text: str, audience: str = "ALL") ->
         _message_date, _sent_messages, _symbol_direction = today, set(), {}
     if message_key in _sent_messages or app is None or not hasattr(app, "bot"):
         return False
-    users = await asyncio.to_thread(recipients, audience)
+    users = await asyncio.to_thread(authorized_recipients, audience)
+    payload = sanitize(text)
     delivered = False
     for user in users:
         try:
-            await app.bot.send_message(chat_id=int(user["id"]), text=str(text)[:TELEGRAM_LIMIT])
-            delivered = True
-        except asyncio.CancelledError:
-            raise
-        except Exception:
+            user_id = int(user["id"])
+        except (KeyError, TypeError, ValueError):
             continue
+        if await _deliver_once(app, user_id, payload):
+            delivered = True
     if delivered:
+        # Acknowledged: the same message key can never be sent twice today.
         _sent_messages.add(message_key)
     return delivered
 
@@ -161,8 +239,15 @@ def _signal_text(trade: dict[str, Any], side: str) -> str:
     if "STRONG" in str(raw_trend or "").upper():
         trend = f"STRONG {trend}"
     lines.extend(["SHIVAY SCORE:", f"{trade.get('score', 0)}/100"])
-    risk_value = str(trade.get("risk_level", trade.get("risk", "SAFE"))).upper()
-    decision = "RISKY" if risk_value in {"HIGH", "RISKY"} else "MODERATE" if risk_value in {"MEDIUM", "MODERATE"} else "SAFE"
+    classification = trade.get("signal_class") if isinstance(trade.get("signal_class"), Mapping) else {}
+    verdict = str(classification.get("classification") or trade.get("signal_classification") or "").upper()
+    if verdict in {"SAFE", "RISKY"}:
+        decision = verdict
+    else:
+        risk_value = str(trade.get("risk_level", trade.get("risk", "SAFE"))).upper()
+        decision = "RISKY" if risk_value in {"HIGH", "RISKY"} else "MODERATE" if risk_value in {"MEDIUM", "MODERATE"} else "SAFE"
+    if classification.get("premium"):
+        decision = f"{decision} · PREMIUM 90+"
     lines.extend(["", "DECISION:", decision, "", "CHANDELIER SIGNAL:", side])
     for label, key in (("SIGNAL CANDLE HIGH", "signal_candle_high"), ("SIGNAL CANDLE LOW", "signal_candle_low")):
         value = _money(trade.get(key))
@@ -189,6 +274,25 @@ def _signal_text(trade: dict[str, Any], side: str) -> str:
                    str(trade.get("setup", "Secondary risk and structure checks passed")).replace("_", " ")]
     lines.extend(["", "TOP REASONS:"])
     lines.extend(f"{index}. {reason}" for index, reason in enumerate(reasons[:3], 1))
+
+    holding = str(trade.get("holding_type") or trade.get("trade_type") or "INTRADAY").upper()
+    holding = "OVERNIGHT" if "OVERNIGHT" in holding else "INTRADAY"
+    market_block = trade.get("market_data") if isinstance(trade.get("market_data"), Mapping) else {}
+    age = market_block.get("data_age_seconds", trade.get("data_age_seconds"))
+    freshness = str(market_block.get("data_status", trade.get("data_status", "FRESH"))).upper()
+    if age is not None:
+        try:
+            freshness = f"{freshness} ({float(age):.0f}s old)"
+        except (TypeError, ValueError):
+            pass
+    generated = trade.get("signal_time") or market_block.get("timestamp") or datetime.now(IST)
+    lines.extend(["", f"TRADE TYPE: {holding}",
+                  f"SIGNAL TIME: {_clock(generated)} IST",
+                  f"DATA FRESHNESS: {freshness}",
+                  f"VALID UNTIL: {_clock(trade.get('valid_until') or datetime.now(IST) + timedelta(minutes=18))} IST"])
+    contract_expiry = trade.get("expiry") or trade.get("contract_expiry")
+    if contract_expiry:
+        lines.append(f"CONTRACT EXPIRY: {contract_expiry}")
     return "\n".join(lines)
 
 
