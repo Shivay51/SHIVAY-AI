@@ -58,3 +58,6 @@ angel_instruments_cache.json
 
 # Duplicate-signal cooldown state (regenerated automatically)
 signal_memory_state.json
+
+# Local virtual environment (created by RUN_SHIVAY.bat / START_SHIVAY.bat)
+.venv/

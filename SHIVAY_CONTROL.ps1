@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Start", "Stop", "Restart", "Status", "Logs")]
+    [ValidateSet("Start", "Stop", "Restart", "Status", "Logs", "Run")]
     [string]$Action
 )
 
@@ -55,6 +55,67 @@ function Remove-StaleLock {
     }
 }
 
+function Resolve-BasePython {
+    # Prefer the Windows "py" launcher (most reliable), then fall back to python.exe.
+    $pyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($null -ne $pyLauncher) {
+        & $pyLauncher.Source -3 -c "import sys; assert sys.version_info[:2] >= (3, 10)" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            return @{ Exe = $pyLauncher.Source; Args = @("-3") }
+        }
+    }
+    $python = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($null -ne $python) {
+        & $python.Source -c "import sys; assert sys.version_info[:2] >= (3, 10)" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            return @{ Exe = $python.Source; Args = @() }
+        }
+    }
+    throw "Python 3.10+ was not found. Install 64-bit Python 3.11+ from https://www.python.org/downloads/ (tick 'Add python.exe to PATH') and re-run."
+}
+
+function Get-VenvPython {
+    # Returns the path to a self-contained virtual environment's python.exe,
+    # creating the venv and installing dependencies on first run (or whenever
+    # requirements.txt changes). Never touches the system Python site-packages.
+    $venvDirectory = Join-Path $projectRoot ".venv"
+    $venvPython = Join-Path $venvDirectory "Scripts\python.exe"
+    $stampFile = Join-Path $venvDirectory ".deps_installed"
+    $requirements = Join-Path $projectRoot "requirements.txt"
+
+    if (-not (Test-Path -LiteralPath $requirements)) {
+        throw "requirements.txt was not found next to this script."
+    }
+
+    if (-not (Test-Path -LiteralPath $venvPython)) {
+        $base = Resolve-BasePython
+        Write-Host "Creating self-contained environment (.venv) - first run only, this can take a minute..."
+        & $base.Exe @($base.Args + @("-m", "venv", $venvDirectory))
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $venvPython)) {
+            throw "Failed to create the virtual environment (.venv)."
+        }
+    }
+
+    $requirementsHash = (Get-FileHash -LiteralPath $requirements -Algorithm SHA256).Hash
+    $installedHash = ""
+    if (Test-Path -LiteralPath $stampFile) {
+        $stampContent = Get-Content -LiteralPath $stampFile -Raw -ErrorAction SilentlyContinue
+        $installedHash = if ($null -eq $stampContent) { "" } else { ([string]$stampContent).Trim() }
+    }
+
+    if ($installedHash -ne $requirementsHash) {
+        Write-Host "Installing dependencies into .venv (first run or requirements.txt changed)..."
+        & $venvPython -m pip install --upgrade pip --quiet --disable-pip-version-check
+        & $venvPython -m pip install --disable-pip-version-check -r $requirements
+        if ($LASTEXITCODE -ne 0) {
+            throw "Dependency installation failed. Try running: .\.venv\Scripts\python.exe -m pip install -r requirements.txt"
+        }
+        Set-Content -LiteralPath $stampFile -Value $requirementsHash -Encoding ascii
+    }
+
+    return $venvPython
+}
+
 function Test-Prerequisites {
     if (-not (Test-Path -LiteralPath $botFile)) {
         throw "bot.py was not found next to this script."
@@ -63,20 +124,7 @@ function Test-Prerequisites {
     if (-not (Test-Path -LiteralPath $envFile)) {
         throw "No .env file was found. Copy .env.example to .env and fill in your credentials."
     }
-    $python = (Get-Command python.exe -ErrorAction Stop).Source
-    $probe = & $python -c "import telegram, dotenv, requests" 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Installing Python dependencies (first run only)..."
-        $requirements = Join-Path $projectRoot "requirements.txt"
-        if (Test-Path -LiteralPath $requirements) {
-            & $python -m pip install --quiet --disable-pip-version-check -r $requirements
-            if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed. Run: python -m pip install -r requirements.txt" }
-        }
-        else {
-            throw "Required packages are missing and requirements.txt was not found. Details: $probe"
-        }
-    }
-    return $python
+    return Get-VenvPython
 }
 
 function Stop-Shivay {
@@ -111,7 +159,29 @@ function Start-Shivay {
     Write-Host "SHIVAY AI started (PID $($started.Id))."
 }
 
+function Invoke-ShivayForeground {
+    $running = Get-ShivayProcess
+    if ($null -ne $running) {
+        Write-Host "SHIVAY AI is already running (PID $($running.ProcessId)). Use STOP_SHIVAY.bat first." -ForegroundColor Yellow
+        return
+    }
+    Remove-StaleLock
+    New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+    $python = Test-Prerequisites
+    Write-Host ""
+    Write-Host "============================================================" -ForegroundColor Cyan
+    Write-Host "  Starting SHIVAY AI - watch the startup summary below." -ForegroundColor Cyan
+    Write-Host "  Press Ctrl+C in this window to stop the bot." -ForegroundColor Cyan
+    Write-Host "============================================================" -ForegroundColor Cyan
+    Write-Host ""
+    & $python $botFile
+}
+
 switch ($Action) {
+    "Run" {
+        Invoke-ShivayForeground
+        exit 0
+    }
     "Status" {
         $running = Get-ShivayProcess
         if ($null -ne $running) { Write-Host "SHIVAY AI RUNNING (PID $($running.ProcessId))"; exit 0 }
