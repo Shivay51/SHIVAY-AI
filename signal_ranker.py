@@ -5,6 +5,7 @@ from datetime import date
 from typing import Any, Mapping
 
 from config import MIN_RISK_REWARD, MIN_SCORE
+from signal_performance import setup_edge
 
 _best_signal: dict[str, Any] | None = None
 _last_grade, _last_priority = "C", 0
@@ -41,12 +42,16 @@ def rank_trade(signal):
     chandelier = signal.get("chandelier_entry_state", {}) if isinstance(signal.get("chandelier_entry_state"), Mapping) else {}
     chandelier_ok = bool(chandelier.get("confirmed") and chandelier.get("status") == "CONFIRMED" and chandelier.get("side") == side)
     valid = bool(side and chandelier_ok and score >= max(70, int(MIN_SCORE)) and confidence >= 70 and adx_value >= 22 and rr >= float(MIN_RISK_REWARD) and bool(signal.get("volume_spike")) and bool(signal.get("entry_validity", {}).get("valid", True)) and context >= 75 and critical_ok and mtf)
-    quality = int(min(100, round(score * .30 + confidence * .22 + context * .20 + min(100, adx_value * 2.5) * .10 + min(100, rr * 25) * .10 + _num(signal.get("sector_priority", 50)) * .04 + min(100, _num(signal.get("relative_volume")) * 50) * .04))) if valid else 0
+    base_quality = score * .30 + confidence * .22 + context * .20 + min(100, adx_value * 2.5) * .10 + min(100, rr * 25) * .10 + _num(signal.get("sector_priority", 50)) * .04 + min(100, _num(signal.get("relative_volume")) * 50) * .04
+    # Historical win-rate feedback: 0.0 until there is a real track record, then
+    # a bounded nudge up for setups that have won and down for those that lost.
+    edge = setup_edge(signal.get("setup") or signal.get("setup_type"), signal.get("symbol"), side)
+    quality = int(max(0, min(100, round(base_quality + edge)))) if valid else 0
     grade = "A+" if quality >= 90 else "A" if quality >= 84 else "B+" if quality >= 78 else "C"
     valid = valid and grade != "C"
     priority = 100 if grade == "A+" else 90 if grade == "A" else 75 if grade == "B+" else 0
     _last_grade, _last_priority = grade, priority
-    return {"valid": valid, "signal_score": quality if valid else 0, "final_confidence": int(confidence) if valid else 0, "trade_grade": grade, "trade_priority": priority, "telegram_priority": "URGENT" if grade == "A+" else "HIGH" if grade == "A" else "NORMAL" if grade == "B+" else "NONE", "risk_reward": round(rr, 2), "signal_quality": "STRONG" if quality >= 90 else "QUALIFIED" if valid else "WEAK"}
+    return {"valid": valid, "signal_score": quality if valid else 0, "final_confidence": int(confidence) if valid else 0, "trade_grade": grade, "trade_priority": priority, "telegram_priority": "URGENT" if grade == "A+" else "HIGH" if grade == "A" else "NORMAL" if grade == "B+" else "NONE", "risk_reward": round(rr, 2), "historical_edge": edge, "signal_quality": "STRONG" if quality >= 90 else "QUALIFIED" if valid else "WEAK"}
 
 
 def rank_signals(signals, max_signals=3):
