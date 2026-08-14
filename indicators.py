@@ -82,19 +82,49 @@ def atr(high, low, close, period=14):
     if values.empty:
         return 0.0
     value = values.dropna()
-    if value.dropna().empty:
-        data = pd.DataFrame({"high": high, "low": low, "close": close}, dtype="float64").dropna()
-        if len(data) < 2:
-            return 0.0
-        true_range = pd.concat(
-            [data["high"] - data["low"], (data["high"] - data["close"].shift()).abs(),
-             (data["low"] - data["close"].shift()).abs()], axis=1
-        ).max(axis=1)
-        result = float(true_range.tail(min(max(2, int(period)), len(true_range))).mean())
-        return result if pd.notna(result) and result > 0 else 0.0
-
+    if value.empty:
+        # No finite Wilder ATR yet (insufficient history). Return the neutral
+        # "unavailable" sentinel (0.0) rather than a different, non-Wilder
+        # mean-of-TR value, so every caller sees one consistent ATR definition.
+        return 0.0
     result = float(value.iloc[-1])
     return result if pd.notna(result) and result > 0 else 0.0
+
+
+def rsi_series(close, period=14):
+    """Return the Wilder-smoothed RSI series (TradingView-standard).
+
+    Gains and losses are smoothed with Wilder's method (``alpha=1/period``) —
+    the same implementation the indicator snapshot uses — so the score engine
+    and every other caller share one consistent RSI. Degenerate windows are
+    masked to their limits (all-gain -> 100, all-loss -> 0, flat -> 50).
+    """
+    try:
+        period = max(2, int(period))
+    except (TypeError, ValueError, OverflowError):
+        period = 14
+    close = pd.Series(close, dtype="float64").dropna()
+    if len(close) < period + 1:
+        return pd.Series(dtype="float64")
+    delta = close.diff()
+    gain = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    rs = gain / loss.replace(0, pd.NA)
+    values = 100 - 100 / (1 + rs)
+    values = (
+        values.mask((loss == 0) & (gain > 0), 100.0)
+        .mask((gain == 0) & (loss > 0), 0.0)
+        .mask((gain == 0) & (loss == 0), 50.0)
+    )
+    return values.dropna()
+
+
+def rsi(close, period=14, fallback=50.0):
+    """Return the latest Wilder RSI value, or ``fallback`` when unavailable."""
+    values = rsi_series(close, period)
+    if values.empty:
+        return float(fallback)
+    return float(values.iloc[-1])
 
 
 def supertrend(high, low, close):
@@ -274,12 +304,7 @@ def calculate_indicator_snapshot(candles: Sequence[Mapping[str, Any]]) -> dict[s
     for period, values in ema_values.items():
         result[f"ema{period}"] = float(values.dropna().iloc[-1]) if not values.dropna().empty else 0.0
 
-    delta = close.diff()
-    gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
-    loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
-    rs = gain / loss.replace(0, pd.NA)
-    rsi_values = 100 - 100 / (1 + rs)
-    rsi_values = rsi_values.mask((loss == 0) & (gain > 0), 100.0).mask((gain == 0) & (loss > 0), 0.0).mask((gain == 0) & (loss == 0), 50.0).dropna()
+    rsi_values = rsi_series(close)
     result["rsi"] = float(rsi_values.iloc[-1]) if not rsi_values.empty else 0.0
 
     up = high.diff()

@@ -1,30 +1,15 @@
-import pandas as pd
+"""Backward-compatible RSI entry point.
+
+The canonical Wilder RSI now lives in :mod:`indicators`, so the score engine,
+the indicator snapshot, and every other caller share one identical
+implementation (TradingView-standard Wilder smoothing) instead of the previous
+simple rolling-mean RSI. This module preserves the historical
+``calculate_rsi`` name, its neutral 50.0 fallback, and 2-decimal rounding as a
+thin wrapper so existing imports keep working unchanged.
+"""
+
+from indicators import rsi as _wilder_rsi
 
 
 def calculate_rsi(close, period=14):
-
-    close = pd.Series(close, dtype="float64").dropna()
-
-    if len(close) < period + 1:
-        return 50.0
-
-    delta = close.diff()
-
-    gain = delta.where(delta > 0, 0)
-
-    loss = -delta.where(delta < 0, 0)
-
-    avg_gain = gain.rolling(period).mean()
-
-    avg_loss = loss.rolling(period).mean()
-
-    rs = avg_gain / avg_loss.replace(0, float("nan"))
-
-    rsi = 100 - (100 / (1 + rs))
-
-    value = rsi.dropna()
-    if value.empty:
-        if float(avg_gain.iloc[-1]) > 0 and float(avg_loss.iloc[-1]) == 0:
-            return 100.0
-        return 50.0
-    return round(float(value.iloc[-1]), 2)
+    return round(_wilder_rsi(close, period, fallback=50.0), 2)
