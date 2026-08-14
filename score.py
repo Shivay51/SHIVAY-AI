@@ -1,6 +1,6 @@
 """Symmetric BUY/SELL technical scoring for SHIVAY AI."""
 
-from indicators import adx, atr, ema20, ema50, ema200, macd, supertrend, volume_spike, vwap
+from indicators import adx, atr, ema20, ema50, ema200, macd, session_vwap_from_market, supertrend, volume_spike, vwap
 from rsi import calculate_rsi
 from support_resistance import support_resistance
 from multitimeframe import analyze_timeframes
@@ -30,7 +30,9 @@ def calculate_score(market):
     rsi = calculate_rsi(close)
     atr_value = atr(high, low, close)
     adx_value = adx(high, low, close)
-    vwap_value = vwap(high, low, close, volume)
+    # Session-anchored VWAP (resets each trading day) when the payload carries
+    # timestamped candles; falls back to the legacy cumulative VWAP otherwise.
+    vwap_value = session_vwap_from_market(market) or vwap(high, low, close, volume)
     st_bullish = supertrend(high, low, close)
     macd_bullish = macd(close)
     volume_ok = volume_spike(volume)

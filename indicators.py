@@ -259,6 +259,50 @@ def vwap(high, low, close, volume):
     return float(value.iloc[-1])
 
 
+def session_vwap_from_market(market, tz: str = "Asia/Kolkata"):
+    """Return the current session's anchored VWAP from timestamped candles.
+
+    Intraday VWAP must reset at each session open; a running cumulative VWAP
+    over several days (as ``vwap`` computes) drifts far from the value traders
+    actually watch, so the price-vs-VWAP gate degrades into a near-constant
+    ``True`` during trends. This groups the payload's timestamped candles by
+    trading date (IST) and returns the VWAP of the most recent session only.
+
+    Returns 0.0 when the payload has no usable timestamped candles, so callers
+    can fall back to the legacy cumulative ``vwap`` and never break.
+    """
+    candles = market.get("candles") if isinstance(market, Mapping) else None
+    if not isinstance(candles, (list, tuple)) or len(candles) < 2:
+        return 0.0
+    rows = []
+    for candle in candles:
+        if not isinstance(candle, Mapping):
+            return 0.0
+        rows.append(
+            (candle.get("timestamp"), candle.get("high"), candle.get("low"),
+             candle.get("close"), candle.get("volume"))
+        )
+    frame = pd.DataFrame(rows, columns=["ts", "high", "low", "close", "volume"])
+    for column in ("high", "low", "close", "volume"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame["ts"] = pd.to_datetime(frame["ts"], utc=True, errors="coerce")
+    frame = frame.dropna(subset=["ts", "high", "low", "close", "volume"])
+    frame = frame[frame["volume"] >= 0]
+    if frame.empty:
+        return 0.0
+
+    try:
+        session = frame["ts"].dt.tz_convert(tz).dt.date
+    except (TypeError, ValueError):
+        return 0.0
+    day = frame[session == session.iloc[-1]]
+    session_volume = float(day["volume"].sum())
+    if session_volume <= 0:
+        return float(day["close"].iloc[-1])
+    typical_price = (day["high"] + day["low"] + day["close"]) / 3.0
+    return float((typical_price * day["volume"]).sum() / session_volume)
+
+
 def volume_spike(volume):
     volume = pd.Series(volume, dtype="float64").dropna()
 
