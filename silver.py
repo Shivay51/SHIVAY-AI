@@ -571,6 +571,19 @@ def _build_analysis() -> dict[str, Any]:
         and chandelier_30m.get("trend") == expected_timeframe
         and chandelier_15m.get("valid") and chandelier_30m.get("valid")
     )
+    # Global-macro directional veto: a silver trade must not run directly
+    # against a fresh, confident global backdrop (XAGUSD/COMEX/DXY/USDINR).
+    # Confidence only reaches the threshold when the primary feed is fresh, so a
+    # stale or degraded macro read never blocks a signal.
+    macro_bias = str(global_context.get("silver_bias") or "SIDEWAYS").upper()
+    macro_confidence = _number(global_context.get("silver_confidence"))
+    macro_opposes = (
+        macro_confidence >= config.METALS_MACRO_VETO_MIN_CONFIDENCE
+        and (
+            (leading_side == "BUY" and macro_bias == "BEARISH")
+            or (leading_side == "SELL" and macro_bias == "BULLISH")
+        )
+    )
     signal_valid = (
         indian_mcx_verified
         and
@@ -587,9 +600,12 @@ def _build_analysis() -> dict[str, Any]:
         and not late_entry
         and not exhausted
         and not stale
+        and not macro_opposes
         and _market_open(now)
     )
     signal = leading_side if signal_valid else "NO TRADE"
+    if macro_opposes:
+        reasons.append(f"Global silver macro is {macro_bias.title()} ({int(macro_confidence)}%) against a {leading_side.title()}")
     if stale:
         reasons.append("Silver quote is stale")
     if not _market_open(now):

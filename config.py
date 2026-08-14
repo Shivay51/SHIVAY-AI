@@ -74,6 +74,13 @@ MAX_RISK = 2.0
 
 MIN_RISK_REWARD = max(1.0, _environment_float("MIN_RISK_REWARD", default=2.0))
 
+# Metals global-macro directional veto: block a gold/silver signal when a
+# FRESH, confident global macro read (XAUUSD/COMEX/DXY/USDINR) directly opposes
+# the trade side. The metals bias only reports >=61 confidence when its primary
+# feed is fresh, so a ~55 threshold vetoes on confirmed opposition and never on
+# a stale/degraded macro feed. Set to 101 to disable the veto entirely.
+METALS_MACRO_VETO_MIN_CONFIDENCE = _environment_float("METALS_MACRO_VETO_MIN_CONFIDENCE", default=55.0)
+
 
 # ==========================================
 # AI FILTERS
